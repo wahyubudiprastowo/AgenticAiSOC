@@ -17,6 +17,16 @@
 - Evidence validation: 14/14 testable automatic normalized categories and 2/2
   manual-ingest categories produced findings linked to their exact event UUID.
   Zero-Day remains explicitly non-testable automatically.
+- IOC/CVE patch: public IP, domain, URL, hash, and CVE evidence is now linked to
+  each deterministic finding with provider-level status. A live end-to-end test
+  produced all five indicator types and preserved its source CVE; the synthetic
+  event/finding was removed after validation.
+- Historical migration added 1,242 public-IP finding links without updating or
+  deleting existing event/finding rows. A pre-patch finding snapshot was compared
+  after deployment and every pre-existing field remained identical.
+- Runtime truthfulness: Settings now separates configured, live, partial,
+  stale-cache, and unavailable intelligence integrations. Upstream HTTP/auth/rate
+  failures no longer appear as healthy provider results.
 
 ## Port Collision Matrix — Verified
 | Port | Service | Collides? |

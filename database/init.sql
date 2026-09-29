@@ -31,6 +31,16 @@ CREATE INDEX IF NOT EXISTS idx_findings_category ON findings (category);
 CREATE INDEX IF NOT EXISTS idx_findings_severity ON findings (severity);
 CREATE INDEX IF NOT EXISTS idx_findings_created ON findings (created_time DESC);
 CREATE UNIQUE INDEX IF NOT EXISTS uq_findings_primary_event ON findings (primary_event_id) WHERE primary_event_id IS NOT NULL;
+CREATE TABLE IF NOT EXISTS finding_indicators (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(), finding_id UUID NOT NULL REFERENCES findings(id) ON DELETE CASCADE,
+    event_id UUID REFERENCES events(id) ON DELETE SET NULL, ioc TEXT NOT NULL, ioc_type TEXT NOT NULL,
+    malicious BOOLEAN NOT NULL DEFAULT FALSE, confidence NUMERIC(4,3) NOT NULL DEFAULT 0.0,
+    enrichment_status TEXT NOT NULL DEFAULT 'unknown', verdict_reason TEXT,
+    provider_results JSONB NOT NULL DEFAULT '[]'::jsonb, checked_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    UNIQUE (finding_id, ioc_type, ioc)
+);
+CREATE INDEX IF NOT EXISTS idx_finding_indicators_finding ON finding_indicators (finding_id);
+CREATE INDEX IF NOT EXISTS idx_finding_indicators_ioc ON finding_indicators (ioc_type, ioc);
 CREATE TABLE IF NOT EXISTS agent_runs (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(), agent_name TEXT NOT NULL,
     finding_id UUID REFERENCES findings(id) ON DELETE CASCADE, input_payload JSONB,

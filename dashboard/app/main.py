@@ -119,7 +119,10 @@ def _settings_inventory() -> list[dict]:
 async def api_settings() -> dict:
     health_data = await api_health()
     async with httpx.AsyncClient() as client:
-        hermes_stats = await _safe_get(client, f"{HERMES_URL}/stats", {})
+        hermes_stats, intel_providers, feed_stats = await asyncio.gather(
+            _safe_get(client, f"{HERMES_URL}/stats", {}),
+            _safe_get(client, f"{THREAT_INTEL_URL}/providers", {}),
+            _safe_get(client, f"{THREAT_INTEL_URL}/feeds/stats", {}))
     groups = _settings_inventory(); settings = [item for group in groups for item in group["settings"]]
     skills = hermes_stats.get("skills_loaded", [])
     return {"groups": groups, "setting_count": len(settings),
@@ -129,6 +132,7 @@ async def api_settings() -> dict:
         "hermes": {"workers": int(hermes_stats.get("finding_workers", 0) or 0),
                    "queue_depth": int(hermes_stats.get("filtered_queue_length", 0) or 0),
                    "skills_count": len(skills), "skills": skills},
+        "threat_intel": {"providers": intel_providers, "feeds": feed_stats},
         "source_of_truth": ".env", "editable": False,
         "generated_at": datetime.now(timezone.utc).isoformat()}
 async def _safe_get(client: httpx.AsyncClient, url: str, default: Any) -> Any:

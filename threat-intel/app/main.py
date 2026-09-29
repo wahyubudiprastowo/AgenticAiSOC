@@ -5,7 +5,7 @@ from fastapi import FastAPI
 from pydantic import BaseModel
 from . import cyfirma_feeds
 from . import db
-from .providers import run_all_providers
+from .providers import provider_statuses, run_all_providers, warm_cyfirma_feed
 logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"))
 logger = logging.getLogger("threat-intel.main")
 app = FastAPI(title="Threat Intelligence Service", version="4.0.0")
@@ -20,17 +20,12 @@ async def startup_event() -> None:
     threading.Thread(target=cyfirma_feeds.org_vuln_loop, daemon=True).start()
     threading.Thread(target=cyfirma_feeds.research_loop, daemon=True).start()
     threading.Thread(target=cyfirma_feeds.taxii_loop, daemon=True).start()
+    threading.Thread(target=warm_cyfirma_feed, daemon=True).start()
 @app.get("/health")
 async def health() -> dict: return {"status": "ok", "service": "threat-intel"}
 @app.get("/providers")
 async def providers_status() -> dict:
-    def _st(e, k):
-        enabled = os.getenv(e, "true").lower() == "true"; has_key = bool(os.getenv(k, ""))
-        return {"enabled": enabled, "mode": "live" if (enabled and has_key) else ("mock" if enabled else "disabled")}
-    return {"virustotal": _st("VT_ENABLED", "VT_API_KEY"), "abuseipdb": _st("ABUSEIPDB_ENABLED", "ABUSEIPDB_API_KEY"),
-        "otx": _st("OTX_ENABLED", "OTX_API_KEY"), "threatfox": _st("THREATFOX_ENABLED", "THREATFOX_API_KEY"),
-        "urlhaus": _st("URLHAUS_ENABLED", "URLHAUS_API_KEY"), "crowdsec": _st("CROWDSEC_ENABLED", "CROWDSEC_API_KEY"),
-        "cyfirma": _st("CYFIRMA_ENABLED", "CYFIRMA_API_KEY")}
+    return provider_statuses()
 @app.get("/feeds/stats")
 async def feeds_stats() -> dict:
     return {**cyfirma_feeds.get_stats(), "org_vuln_enabled": cyfirma_feeds.ORG_VULN_ENABLED,
@@ -48,16 +43,28 @@ def poll_now() -> dict:
 @app.post("/enrich")
 def enrich(payload: EnrichRequest) -> dict:
     cache_key = f"{payload.ioc_type}:{payload.ioc}"; now = time.time(); cached = _CACHE.get(cache_key)
-    if cached and (now - cached[0]) < CACHE_TTL_SECONDS: return cached[1]
+    if cached and (now - cached[0]) < CACHE_TTL_SECONDS:
+        return {**cached[1], "cache_status": "fresh", "cache_age_seconds": round(now - cached[0], 1)}
     providers = run_all_providers(payload.ioc, payload.ioc_type)
     live_hits = [p for p in providers if p.get("mode") == "live" and p.get("malicious")]
     strong_sources = {"threatfox", "urlhaus", "cyfirma", "crowdsec_watchlist"}
     strong_exact_hit = any(p.get("name") in strong_sources and float(p.get("score", 0)) >= 0.8 for p in live_hits)
-    high_score_hit = any(float(p.get("score", 0)) >= 0.8 for p in live_hits)
+    trusted_score_sources = strong_sources | {"virustotal", "abuseipdb", "crowdsec"}
+    high_score_hit = any(p.get("name") in trusted_score_sources and float(p.get("score", 0)) >= 0.8 for p in live_hits)
     consensus = len({p.get("name") for p in live_hits if float(p.get("score", 0)) >= 0.2}) >= 2
     malicious = strong_exact_hit or high_score_hit or consensus
     confidence = round(max((float(p.get("score", 0.0)) for p in live_hits), default=0.0), 3) if malicious else 0.0
     reason = "exact/high-confidence live hit" if (strong_exact_hit or high_score_hit) else "multi-provider live consensus" if consensus else "insufficient live evidence"
+    live_count = sum(p.get("mode") == "live" for p in providers)
+    unavailable_count = sum(p.get("mode") == "unavailable" for p in providers)
+    stale_count = sum(p.get("mode") == "stale_cache" for p in providers)
+    enrichment_status = ("complete" if live_count and not unavailable_count and not stale_count else
+                         "partial" if live_count else "stale_cache" if stale_count else "unavailable")
+    if enrichment_status == "unavailable" and cached:
+        stale = {**cached[1], "enrichment_status": "stale_cache", "cache_status": "stale",
+                 "cache_age_seconds": round(now - cached[0], 1)}
+        return stale
     result = {"ioc": payload.ioc, "ioc_type": payload.ioc_type, "malicious": malicious,
-              "confidence": confidence, "verdict_reason": reason, "providers": providers}
+              "confidence": confidence, "verdict_reason": reason, "enrichment_status": enrichment_status,
+              "cache_status": "miss", "providers": providers}
     _CACHE[cache_key] = (now, result); return result

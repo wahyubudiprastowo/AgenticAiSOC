@@ -1,0 +1,390 @@
+{
+  "tested_at": "2026-09-29T15:38:57Z",
+  "marker": "[IOC_SYNC_TEST] 3a825a9c-e4a7-4bc8-8a23-fed7f59a75f8",
+  "event_id": "04fdeed7-89c0-4bc4-8296-63d49617d324",
+  "finding_id": "23a2f498-5dad-49a0-978b-6830a72c21d9",
+  "latency_seconds": 10.92,
+  "classification": "Vulnerability",
+  "analysis_status": "complete",
+  "cves": [
+    "CVE-2024-3400"
+  ],
+  "cve_status": "observed_in_source_event",
+  "indicator_types": [
+    "cve",
+    "domain",
+    "hash",
+    "ip",
+    "url"
+  ],
+  "indicator_count": 5,
+  "indicators": [
+    {
+      "ioc": "CVE-2024-3400",
+      "ioc_type": "cve",
+      "malicious": false,
+      "confidence": 0.0,
+      "enrichment_status": "complete",
+      "verdict_reason": "insufficient live evidence",
+      "providers": [
+        {
+          "name": "otx",
+          "mode": "live",
+          "malicious": true,
+          "score": 1.0,
+          "detail": "OTX pulses (50): ClickFix-Themed Campaign Deploys Starland RAT and WLDR Framework; NightLedger Backdoor Deployed in Espionage Campaign Targeting the Middle East and Africa; \u201cBroken Seal\u201d DocuSign-themed Delivery with Fileless Process Hollowing (Zeppelin/Bloat-A); Actively_Exploited_Kev | Sep 24, 2026; Actively_Exploited_Kev | Sep 23, 2026"
+        }
+      ]
+    },
+    {
+      "ioc": "example.com",
+      "ioc_type": "domain",
+      "malicious": false,
+      "confidence": 0.0,
+      "enrichment_status": "partial",
+      "verdict_reason": "insufficient live evidence",
+      "providers": [
+        {
+          "name": "virustotal",
+          "mode": "unavailable",
+          "malicious": false,
+          "score": 0.0,
+          "detail": "HTTP 429"
+        },
+        {
+          "name": "otx",
+          "mode": "unavailable",
+          "malicious": false,
+          "score": 0.0,
+          "detail": "ReadTimeout"
+        },
+        {
+          "name": "urlhaus",
+          "mode": "live",
+          "malicious": false,
+          "score": 0.0,
+          "detail": null
+        },
+        {
+          "name": "cyfirma",
+          "mode": "unavailable",
+          "malicious": false,
+          "score": 0.0,
+          "detail": "IOC feed is warming or unavailable"
+        }
+      ]
+    },
+    {
+      "ioc": "275a021bbfb6489e54d471899f7db9d1663fc695ec2c866c7c8c0843a2e3ab6f",
+      "ioc_type": "hash",
+      "malicious": false,
+      "confidence": 0.0,
+      "enrichment_status": "unavailable",
+      "verdict_reason": "insufficient live evidence",
+      "providers": [
+        {
+          "name": "virustotal",
+          "mode": "unavailable",
+          "malicious": false,
+          "score": 0.0,
+          "detail": "HTTP 429"
+        },
+        {
+          "name": "otx",
+          "mode": "unavailable",
+          "malicious": false,
+          "score": 0.0,
+          "detail": "ReadTimeout"
+        },
+        {
+          "name": "cyfirma",
+          "mode": "unavailable",
+          "malicious": false,
+          "score": 0.0,
+          "detail": "IOC feed is warming or unavailable"
+        }
+      ]
+    },
+    {
+      "ioc": "8.8.8.8",
+      "ioc_type": "ip",
+      "malicious": false,
+      "confidence": 0.0,
+      "enrichment_status": "partial",
+      "verdict_reason": "insufficient live evidence",
+      "providers": [
+        {
+          "name": "virustotal",
+          "mode": "unavailable",
+          "malicious": false,
+          "score": 0.0,
+          "detail": "HTTP 429"
+        },
+        {
+          "name": "abuseipdb",
+          "mode": "unavailable",
+          "malicious": false,
+          "score": 0.0,
+          "detail": "HTTP 401"
+        },
+        {
+          "name": "otx",
+          "mode": "live",
+          "malicious": false,
+          "score": 0.0,
+          "detail": null
+        },
+        {
+          "name": "threatfox",
+          "mode": "live",
+          "malicious": false,
+          "score": 0.0,
+          "detail": null
+        },
+        {
+          "name": "crowdsec",
+          "mode": "unavailable",
+          "malicious": false,
+          "score": 0.0,
+          "detail": "HTTP 403"
+        },
+        {
+          "name": "cyfirma",
+          "mode": "unavailable",
+          "malicious": false,
+          "score": 0.0,
+          "detail": "IOC feed is warming or unavailable"
+        }
+      ]
+    },
+    {
+      "ioc": "http://example.com/",
+      "ioc_type": "url",
+      "malicious": false,
+      "confidence": 0.0,
+      "enrichment_status": "partial",
+      "verdict_reason": "insufficient live evidence",
+      "providers": [
+        {
+          "name": "virustotal",
+          "mode": "unavailable",
+          "malicious": false,
+          "score": 0.0,
+          "detail": "HTTP 429"
+        },
+        {
+          "name": "urlhaus",
+          "mode": "live",
+          "malicious": false,
+          "score": 0.0,
+          "detail": null
+        },
+        {
+          "name": "threatfox",
+          "mode": "live",
+          "malicious": false,
+          "score": 0.0,
+          "detail": null
+        },
+        {
+          "name": "cyfirma",
+          "mode": "unavailable",
+          "malicious": false,
+          "score": 0.0,
+          "detail": "IOC feed is warming or unavailable"
+        }
+      ]
+    }
+  ],
+  "provider_runtime": {
+    "virustotal": {
+      "enabled": true,
+      "mode": "unavailable",
+      "last_checked": 1790696337.1201553,
+      "last_ioc_type": "hash",
+      "detail": "domain: HTTP 429; hash: HTTP 429; ip: HTTP 429; url: HTTP 429",
+      "by_ioc_type": {
+        "url": {
+          "mode": "unavailable",
+          "last_checked": 1790696327.0538313,
+          "detail": "HTTP 429"
+        },
+        "domain": {
+          "mode": "unavailable",
+          "last_checked": 1790696336.586839,
+          "detail": "HTTP 429"
+        },
+        "ip": {
+          "mode": "unavailable",
+          "last_checked": 1790696336.79102,
+          "detail": "HTTP 429"
+        },
+        "hash": {
+          "mode": "unavailable",
+          "last_checked": 1790696337.1201553,
+          "detail": "HTTP 429"
+        }
+      }
+    },
+    "abuseipdb": {
+      "enabled": true,
+      "mode": "unavailable",
+      "last_checked": 1790696336.7910335,
+      "last_ioc_type": "ip",
+      "detail": "ip: HTTP 401",
+      "by_ioc_type": {
+        "ip": {
+          "mode": "unavailable",
+          "last_checked": 1790696336.7910335,
+          "detail": "HTTP 401"
+        }
+      }
+    },
+    "otx": {
+      "enabled": true,
+      "mode": "partial",
+      "last_checked": 1790696337.120163,
+      "last_ioc_type": "hash",
+      "detail": "domain: ReadTimeout; hash: ReadTimeout",
+      "by_ioc_type": {
+        "domain": {
+          "mode": "unavailable",
+          "last_checked": 1790696336.586851,
+          "detail": "ReadTimeout"
+        },
+        "ip": {
+          "mode": "live",
+          "last_checked": 1790696336.7910383,
+          "detail": null
+        },
+        "cve": {
+          "mode": "live",
+          "last_checked": 1790696329.39187,
+          "detail": "OTX pulses (50): ClickFix-Themed Campaign Deploys Starland RAT and WLDR Framework; NightLedger Backdoor Deployed in Espionage Campaign Targeting the Middle East and Africa; \u201cBroken Seal\u201d DocuSign-themed Delivery with Fileless Process Hollowing (Zeppelin/Bloat-A); Actively_Exploited_Kev | Sep 24, 2026; Actively_Exploited_Kev | Sep 23, 2026"
+        },
+        "hash": {
+          "mode": "unavailable",
+          "last_checked": 1790696337.120163,
+          "detail": "ReadTimeout"
+        }
+      }
+    },
+    "threatfox": {
+      "enabled": true,
+      "mode": "live",
+      "last_checked": 1790696336.791042,
+      "last_ioc_type": "ip",
+      "detail": null,
+      "by_ioc_type": {
+        "url": {
+          "mode": "live",
+          "last_checked": 1790696327.0538456,
+          "detail": null
+        },
+        "ip": {
+          "mode": "live",
+          "last_checked": 1790696336.791042,
+          "detail": null
+        }
+      }
+    },
+    "urlhaus": {
+      "enabled": true,
+      "mode": "live",
+      "last_checked": 1790696336.5868556,
+      "last_ioc_type": "domain",
+      "detail": null,
+      "by_ioc_type": {
+        "url": {
+          "mode": "live",
+          "last_checked": 1790696327.0538406,
+          "detail": null
+        },
+        "domain": {
+          "mode": "live",
+          "last_checked": 1790696336.5868556,
+          "detail": null
+        }
+      }
+    },
+    "crowdsec": {
+      "enabled": true,
+      "mode": "unavailable",
+      "last_checked": 1790696336.7910452,
+      "last_ioc_type": "ip",
+      "detail": "ip: HTTP 403",
+      "by_ioc_type": {
+        "ip": {
+          "mode": "unavailable",
+          "last_checked": 1790696336.7910452,
+          "detail": "HTTP 403"
+        }
+      }
+    },
+    "cyfirma": {
+      "enabled": true,
+      "mode": "unavailable",
+      "last_checked": 1790696337.120167,
+      "last_ioc_type": "hash",
+      "detail": "domain: IOC feed is warming or unavailable; hash: IOC feed is warming or unavailable; ip: IOC feed is warming or unavailable; url: IOC feed is warming or unavailable",
+      "by_ioc_type": {
+        "url": {
+          "mode": "unavailable",
+          "last_checked": 1790696327.0538483,
+          "detail": "IOC feed is warming or unavailable"
+        },
+        "domain": {
+          "mode": "unavailable",
+          "last_checked": 1790696336.5868602,
+          "detail": "IOC feed is warming or unavailable"
+        },
+        "ip": {
+          "mode": "unavailable",
+          "last_checked": 1790696336.791049,
+          "detail": "IOC feed is warming or unavailable"
+        },
+        "hash": {
+          "mode": "unavailable",
+          "last_checked": 1790696337.120167,
+          "detail": "IOC feed is warming or unavailable"
+        }
+      }
+    }
+  },
+  "feed_runtime": {
+    "org_vuln_polls": 0,
+    "org_vuln_new": 0,
+    "org_vuln_errors": 1,
+    "org_vuln_zero_day_count": 0,
+    "org_vuln_last_success": null,
+    "org_vuln_last_error": "HTTP 401",
+    "research_polls": 0,
+    "research_new": 0,
+    "research_errors": 1,
+    "research_last_success": null,
+    "research_last_error": "ValueError",
+    "taxii_polls": 0,
+    "taxii_objects": 0,
+    "taxii_errors": 0,
+    "taxii_last_success": null,
+    "taxii_last_error": null,
+    "org_vuln_enabled": true,
+    "research_enabled": true,
+    "taxii_enabled": false
+  },
+  "checks": {
+    "all_indicator_types": true,
+    "cve_traceable": true,
+    "cve_status_observed": true,
+    "finding_id_stable": true,
+    "provider_results_attached": true,
+    "finding_analysis_complete": true
+  },
+  "test_records_removed": true,
+  "qdrant_test_memory_removed": true,
+  "deployed_limits": {
+    "SOC_MAX_IOCS_PER_EVENT": 8,
+    "SOC_IOC_ENRICH_WORKERS": 4,
+    "INTEL_PROVIDER_WORKERS": 6
+  }
+}

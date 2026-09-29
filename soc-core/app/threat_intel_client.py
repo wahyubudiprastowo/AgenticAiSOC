@@ -9,4 +9,7 @@ def enrich_ioc(ioc: str, ioc_type: str = "ip"):
             resp = client.post(f"{THREAT_INTEL_URL.rstrip('/')}/enrich", json={"ioc": ioc, "ioc_type": ioc_type})
             resp.raise_for_status(); return resp.json()
     except Exception:
-        logger.warning("threat-intel enrichment failed"); return {"ioc": ioc, "ioc_type": ioc_type, "malicious": False, "confidence": 0.0, "providers": []}
+        logger.warning("threat-intel enrichment failed for type=%s", ioc_type)
+        return {"ioc": ioc, "ioc_type": ioc_type, "malicious": False, "confidence": 0.0,
+                "enrichment_status": "unavailable", "verdict_reason": "threat_intel_service_unavailable",
+                "providers": []}

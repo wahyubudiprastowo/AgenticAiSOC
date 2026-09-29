@@ -130,6 +130,39 @@ queries use SOC Core, so a Hermes, Jev, Qdrant, or threat-intelligence outage do
 not hide already stored findings. Existing rows are preserved by additive schema
 changes and are treated as complete.
 
+## Structured IOC and CVE synchronization
+
+For security-relevant events, SOC Core extracts up to
+`SOC_MAX_IOCS_PER_EVENT` public indicators from normalized source evidence:
+public IP addresses, domains, URLs, MD5/SHA-1/SHA-256 hashes, and CVE IDs.
+Private/reserved addresses and the platform's transport `raw_hash` are excluded
+from external lookups. Provider checks run concurrently with bounded workers so
+one event cannot create an unbounded request fan-out. The process-wide limits
+are `SOC_IOC_ENRICH_WORKERS` for SOC-to-intel calls and
+`INTEL_PROVIDER_WORKERS` for outbound provider calls; they remain fixed even
+when multiple collector loops process events at the same time.
+
+Every checked indicator is linked to the deterministic finding in
+`finding_indicators`, including its provider results, confidence, verdict reason,
+and one of these enrichment states: `complete`, `partial`, `stale_cache`, or
+`unavailable`. Attack Details shows the same structured evidence. Provider
+failures never become clean or malicious mock verdicts when mock mode is off.
+The Settings page reports tested runtime state per provider and IOC type; an API
+key being configured is not presented as proof that the provider is live.
+
+CVE values are evidence fields, so the platform does not invent one for events
+that do not contain a CVE. Attack Details distinguishes:
+
+- `observed_in_source_event`: a CVE was present in the linked source evidence.
+- `missing_from_vulnerability_source`: a vulnerability event arrived without a
+  CVE and its parser/source needs review.
+- `not_reported_or_not_applicable`: the event is not a vulnerability record or
+  its source did not report a CVE.
+
+`database/backfill_finding_indicators.sql` can be run repeatedly to add
+historical public-IP links without changing existing findings or events. New
+events are linked automatically.
+
 ## Syslog Port Forwarding — Reconfiguration Required
 
 Moving the syslog port does NOT automatically redirect any network

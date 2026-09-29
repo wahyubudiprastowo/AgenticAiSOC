@@ -1,10 +1,14 @@
 from __future__ import annotations
-import ipaddress, logging, os, time
-from . import correlation, db, detections, filters, redis_client, wazuh_client, threat_intel_client
+import logging, os, time
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from . import correlation, db, detections, filters, ioc_extractor, redis_client, wazuh_client, threat_intel_client
 logger = logging.getLogger("soc-core.worker")
 WAZUH_POLL_INTERVAL_SECONDS = int(os.getenv("WAZUH_POLL_INTERVAL_SECONDS", "30"))
 WAZUH_FIM_POLL_INTERVAL_SECONDS = int(os.getenv("WAZUH_FIM_POLL_INTERVAL_SECONDS", "60"))
 WAZUH_VULN_POLL_INTERVAL_SECONDS = int(os.getenv("WAZUH_VULN_POLL_INTERVAL_SECONDS", "900"))
+SOC_MAX_IOCS_PER_EVENT = int(os.getenv("SOC_MAX_IOCS_PER_EVENT", "8"))
+SOC_IOC_ENRICH_WORKERS = max(1, int(os.getenv("SOC_IOC_ENRICH_WORKERS", "4")))
+_IOC_ENRICH_EXECUTOR = ThreadPoolExecutor(max_workers=SOC_IOC_ENRICH_WORKERS, thread_name_prefix="ioc-enrich")
 _seen_ids: set[str] = set()
 def _dedupe(doc_id: str) -> bool:
     if doc_id in _seen_ids: return False
@@ -12,23 +16,27 @@ def _dedupe(doc_id: str) -> bool:
     if len(_seen_ids) > 50000: _seen_ids.clear()
     return True
 def _maybe_enrich(event: dict):
-    ioc_hits = []; src_ip = event.get("src_ip")
+    ioc_hits = []
     enrichable_types = {"credential_attack", "malware", "ransomware", "network_attack", "reconnaissance",
                         "web_attack", "dos_attack", "phishing", "data_exfiltration", "insider_risk", "security_alert"}
     should_enrich = (event.get("type") in enrichable_types or event.get("severity") in ("high", "critical")
                      or bool((event.get("raw_kv") or {}).get("security_signal")))
-    try:
-        public_ip = bool(src_ip) and ipaddress.ip_address(str(src_ip)).is_global
-    except ValueError:
-        public_ip = False
-    if public_ip and should_enrich:
-        result = threat_intel_client.enrich_ioc(src_ip, "ip")
-        if result:
+    if should_enrich:
+        indicators = ioc_extractor.extract_iocs(event, limit=SOC_MAX_IOCS_PER_EVENT)
+        ordered: list[dict | None] = [None] * len(indicators)
+        futures = {_IOC_ENRICH_EXECUTOR.submit(threat_intel_client.enrich_ioc,
+                   indicator["ioc"], indicator["ioc_type"]): index for index, indicator in enumerate(indicators)}
+        for future in as_completed(futures):
+            index = futures[future]
+            try: ordered[index] = future.result()
+            except Exception: logger.exception("IOC enrichment worker failed")
+        for indicator, result in zip(indicators, ordered):
+            if not result: continue
             ioc_hits.append(result)
-            if result.get("malicious"):
-                for provider in result.get("providers", []):
-                    db.upsert_intelligence(ioc=src_ip, ioc_type="ip", provider=provider.get("name", "unknown"),
-                        malicious=provider.get("malicious", False), score=provider.get("score", 0.0), raw=provider)
+            for provider in result.get("providers", []):
+                db.upsert_intelligence(ioc=indicator["ioc"], ioc_type=indicator["ioc_type"],
+                    provider=provider.get("name", "unknown"), malicious=provider.get("malicious", False),
+                    score=provider.get("score", 0.0), raw=provider)
     return ioc_hits, bool(event.get("mitre_technique"))
 def process_event(event: dict) -> str:
     existing = db.find_duplicate_event(event)
@@ -38,6 +46,7 @@ def process_event(event: dict) -> str:
     if not inserted: return event_uuid
     correlation.apply(event)
     ioc_hits, mitre_matched = _maybe_enrich(event)
+    event["ioc_hits"] = ioc_hits
     forward = filters.should_forward_to_ai(event, ioc_hits=ioc_hits, mitre_matched=mitre_matched)
     event["is_filtered_in"] = forward
     db.update_event_decision(event_uuid, event)
@@ -45,7 +54,8 @@ def process_event(event: dict) -> str:
         enriched = dict(event); enriched["db_id"] = event_uuid; enriched["ioc_hits"] = ioc_hits
         detection = detections.classify(event)
         if detection:
-            enriched["finding_id"] = db.insert_deterministic_finding(event_uuid, event, detection)
+            enriched["finding_id"] = db.insert_deterministic_finding(event_uuid, event, detection, ioc_hits)
+            db.upsert_finding_indicators(enriched["finding_id"], event_uuid, ioc_hits)
         redis_client.push_filtered_event(enriched)
     return event_uuid
 def _process_event(event: dict) -> None:

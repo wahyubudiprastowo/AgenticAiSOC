@@ -79,6 +79,20 @@ def attack_detail(finding: dict, events: list[dict]) -> dict:
     """Build a stable analyst-facing view from a Hermes finding and its source events."""
     evidence = _json_object(finding.get("evidence")); ai_result = _json_object(finding.get("ai_result"))
     event_details, source_ips, destinations, users, cves, sources, event_types, actions = [], [], [], [], [], [], [], []
+    indicators = finding.get("indicators") or evidence.get("indicators") or []
+    normalized_indicators = []
+    for indicator in indicators:
+        if not isinstance(indicator, dict) or not indicator.get("ioc"): continue
+        providers = indicator.get("provider_results") or indicator.get("providers") or []
+        item = {"ioc": indicator.get("ioc"), "ioc_type": indicator.get("ioc_type") or "unknown",
+                "malicious": bool(indicator.get("malicious")), "confidence": float(indicator.get("confidence") or 0),
+                "enrichment_status": indicator.get("enrichment_status") or "unknown",
+                "verdict_reason": indicator.get("verdict_reason"),
+                "providers": [{"name": p.get("name"), "mode": p.get("mode"),
+                    "malicious": bool(p.get("malicious")), "score": float(p.get("score") or 0),
+                    "detail": p.get("detail")} for p in providers if isinstance(p, dict)]}
+        normalized_indicators.append(item)
+        if item["ioc_type"] == "cve": cves.append(str(item["ioc"]).upper())
     cve_pattern = re.compile(r"CVE-\d{4}-\d{4,8}", re.IGNORECASE)
     for event in events:
         normalized = _json_object(event.get("normalized")); raw_payload = _json_object(event.get("raw_payload"))
@@ -102,7 +116,9 @@ def attack_detail(finding: dict, events: list[dict]) -> dict:
             "workload": raw_kv.get("workload"), "result_status": raw_kv.get("result_status"),
             "verdict": raw_kv.get("verdict"), "threats": raw_kv.get("threats") or [],
             "package": raw_kv.get("package"), "condition": raw_kv.get("condition"),
-            "correlation_count": raw_kv.get("correlation_count"),
+            "cve": raw_kv.get("cve"), "cvss_score": raw_kv.get("cvss_score"),
+            "is_unfixed": raw_kv.get("is_unfixed"), "is_zero_day": raw_kv.get("is_zero_day"),
+            "under_evaluation": raw_kv.get("under_evaluation"), "correlation_count": raw_kv.get("correlation_count"),
         }
         event_details.append({
             "id": str(event.get("id") or ""), "external_id": event.get("external_id"), "source": source,
@@ -116,13 +132,18 @@ def attack_detail(finding: dict, events: list[dict]) -> dict:
         source_ips.extend(src); destinations.extend(dst); users.extend(event_users); cves.extend(event_cves)
         sources.append(source); event_types.append(event_type); actions.append(action)
     mitre_ids = _unique([finding.get("mitre_technique") or [], *[e.get("mitre_techniques", []) for e in event_details]])
+    unique_cves = _unique(cves)
+    cve_status = ("observed_in_source_event" if unique_cves else
+                  "missing_from_vulnerability_source" if finding.get("category") in {"vulnerability_management", "zero_day"}
+                  else "not_reported_or_not_applicable")
     return {
         "finding": {"id": str(finding.get("id") or ""), "classification": finding.get("threat_classification") or "Unknown",
                     "category": finding.get("category") or "unknown", "severity": finding.get("severity") or "low",
                     "confidence": float(finding.get("confidence") or 0), "status": finding.get("status") or "open",
                     "created_time": finding.get("created_time"), "recommendation": finding.get("recommendation") or ""},
         "attack": {"sources": _unique(sources), "source_ips": _unique(source_ips), "destinations": _unique(destinations),
-                   "users": _unique(users), "event_types": _unique(event_types), "actions": _unique(actions), "cves": _unique(cves)},
+                   "users": _unique(users), "event_types": _unique(event_types), "actions": _unique(actions),
+                   "cves": unique_cves, "cve_status": cve_status, "indicators": normalized_indicators},
         "mitre": [{"id": technique, "name": MITRE_NAMES.get(technique, technique)} for technique in mitre_ids],
         "evidence": evidence.get("evidence", []) if isinstance(evidence.get("evidence", []), list) else [],
         "evidence_summary": evidence.get("finding"), "ai_result": _redact(ai_result), "events": event_details,

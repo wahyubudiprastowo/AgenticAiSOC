@@ -46,7 +46,8 @@ class ThreatAnalystAgent:
         credibility = min(round(credibility, 2), 0.99)
         authority = 0.5; source = (event or {}).get("source", "")
         if source == "wazuh": authority += 0.20
-        live_provider_names = {h.get("name") for h in ioc_hits if h.get("mode") == "live"}
+        live_provider_names = {provider.get("name") for hit in ioc_hits for provider in (hit.get("providers") or [])
+                               if provider.get("mode") == "live"}
         if len(live_provider_names) >= 1: authority += 0.15
         if len(live_provider_names) >= 2: authority += 0.10
         if investigation.get("mitre"): authority += 0.10

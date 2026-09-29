@@ -32,6 +32,7 @@ providers = load_module("providers_test", "threat-intel/app/providers.py")
 dashboard_agg = load_module("dashboard_aggregations_test", "dashboard/app/aggregations.py")
 memory = load_module("hermes_memory_test", "hermes/app/memory.py")
 detections = load_module("soc_detections_test", "soc-core/app/detections.py")
+ioc_extractor = load_module("soc_ioc_extractor_test", "soc-core/app/ioc_extractor.py")
 
 
 class M365NormalizerTests(unittest.TestCase):
@@ -167,6 +168,23 @@ class DeterministicFindingTests(unittest.TestCase):
         self.assertIsNone(detections.classify({"type": "generic", "description": "routine audit", "raw_kv": {}}))
 
 
+class IOCExtractionTests(unittest.TestCase):
+    def test_extracts_supported_types_and_excludes_internal_or_transport_hashes(self):
+        event = {"src_ip": "8.8.8.8", "destination": "10.0.0.8",
+                 "description": "CVE-2024-3400 callback https://bad.example/path",
+                 "raw_hash": "a" * 64,
+                 "raw_kv": {"sha256": "b" * 64, "domain": "payload.example", "dstip": "192.168.1.2"}}
+        values = {(item["ioc_type"], item["ioc"]) for item in ioc_extractor.extract_iocs(event)}
+        self.assertIn(("ip", "8.8.8.8"), values)
+        self.assertIn(("cve", "CVE-2024-3400"), values)
+        self.assertIn(("url", "https://bad.example/path"), values)
+        self.assertIn(("domain", "bad.example"), values)
+        self.assertIn(("domain", "payload.example"), values)
+        self.assertIn(("hash", "b" * 64), values)
+        self.assertNotIn(("ip", "10.0.0.8"), values)
+        self.assertNotIn(("hash", "a" * 64), values)
+
+
 class ThreatIntelSafetyTests(unittest.TestCase):
     def test_provider_error_does_not_create_mock_malicious_verdict(self):
         old = providers.THREAT_INTEL_MOCK_MODE
@@ -178,13 +196,31 @@ class ThreatIntelSafetyTests(unittest.TestCase):
         self.assertEqual(result["mode"], "unavailable")
         self.assertFalse(result["malicious"])
 
+    def test_provider_runtime_keeps_per_type_failures_visible(self):
+        previous = providers._provider_runtime.copy()
+        try:
+            providers._provider_runtime.clear()
+            providers._provider_runtime["otx"] = {"by_ioc_type": {
+                "ip": {"mode": "live", "last_checked": 1.0, "detail": None},
+                "cve": {"mode": "unavailable", "last_checked": 2.0, "detail": "ReadTimeout"},
+            }}
+            status = providers.provider_statuses()["otx"]
+        finally:
+            providers._provider_runtime.clear()
+            providers._provider_runtime.update(previous)
+        self.assertEqual(status["mode"], "partial")
+        self.assertEqual(status["by_ioc_type"]["ip"]["mode"], "live")
+        self.assertIn("cve: ReadTimeout", status["detail"])
+
 
 class DashboardAttackDetailTests(unittest.TestCase):
     def test_attack_detail_joins_and_redacts_source_event(self):
         finding = {"id": "finding-1", "category": "vulnerability_management", "threat_classification": "Vulnerability",
                    "severity": "high", "confidence": 0.88, "mitre_technique": ["T1190"],
                    "evidence": {"finding": "Vulnerable package", "evidence": ["CVE confirmed"]},
-                   "ai_result": {"analysis": "confirmed"}, "recommendation": "Patch the package."}
+                   "ai_result": {"analysis": "confirmed"}, "recommendation": "Patch the package.",
+                   "indicators": [{"ioc": "CVE-2025-54293", "ioc_type": "cve", "malicious": False,
+                                   "confidence": 0, "enrichment_status": "partial", "provider_results": []}]}
         event = {"id": "event-1", "source": "wazuh", "type": "vulnerability", "severity": "high",
                  "src_ip": "198.51.100.10", "dst_ip": "10.0.0.8", "description": "CVE-2025-54293 affects lxd",
                  "normalized": {"destination": "server01", "raw_kv": {"cve": "CVE-2025-54293",
@@ -193,6 +229,8 @@ class DashboardAttackDetailTests(unittest.TestCase):
         self.assertEqual(detail["attack"]["source_ips"], ["198.51.100.10"])
         self.assertIn("server01", detail["attack"]["destinations"])
         self.assertEqual(detail["attack"]["cves"], ["CVE-2025-54293"])
+        self.assertEqual(detail["attack"]["cve_status"], "observed_in_source_event")
+        self.assertEqual(detail["attack"]["indicators"][0]["ioc_type"], "cve")
         self.assertEqual(detail["mitre"][0]["name"], "Exploit Public-Facing Application")
         self.assertEqual(detail["events"][0]["raw"]["normalized"]["raw_kv"]["password"], "[REDACTED]")
 

@@ -17,8 +17,15 @@ TAXII_COLLECTION_URL = os.getenv("CYFIRMA_TAXII_COLLECTION_URL", ""); TAXII_BEAR
 TAXII_MAX_PAGES = int(os.getenv("CYFIRMA_TAXII_MAX_PAGES", "2"))
 _ZERO_DAY_MARKERS = ("zero-day", "zero day", "0-day", "0day", "actively exploited", "in the wild", "no patch")
 _stats = {"org_vuln_polls": 0, "org_vuln_new": 0, "org_vuln_errors": 0, "org_vuln_zero_day_count": 0,
-          "research_polls": 0, "research_new": 0, "research_errors": 0, "taxii_polls": 0, "taxii_objects": 0, "taxii_errors": 0}
+          "org_vuln_last_success": None, "org_vuln_last_error": None,
+          "research_polls": 0, "research_new": 0, "research_errors": 0,
+          "research_last_success": None, "research_last_error": None,
+          "taxii_polls": 0, "taxii_objects": 0, "taxii_errors": 0,
+          "taxii_last_success": None, "taxii_last_error": None}
 def get_stats() -> dict: return dict(_stats)
+def _safe_error(exc: Exception) -> str:
+    if isinstance(exc, httpx.HTTPStatusError): return f"HTTP {exc.response.status_code}"
+    return type(exc).__name__
 def _is_zero_day(item: dict) -> bool:
     if item.get("zero_day") is True: return True
     text = f"{item.get('name', '')} {item.get('title', '')} {item.get('description', '')}".lower()
@@ -49,7 +56,10 @@ def poll_org_vulnerabilities_once() -> int:
                          "raw_kv": {"cve": cve, "provider": "cyfirma_org_vuln", "is_zero_day": zero_day}}
                 redis_client.push_raw_event(event)
         _stats["org_vuln_polls"] += 1; _stats["org_vuln_new"] += new_count
-    except Exception: _stats["org_vuln_errors"] += 1
+        _stats["org_vuln_last_success"] = datetime.now(timezone.utc).isoformat(); _stats["org_vuln_last_error"] = None
+    except Exception as exc:
+        _stats["org_vuln_errors"] += 1; _stats["org_vuln_last_error"] = _safe_error(exc)
+        logger.warning("CYFIRMA org vulnerability poll failed: %s", _safe_error(exc))
     return new_count
 def org_vuln_loop() -> None:
     if not ORG_VULN_ENABLED: return
@@ -63,14 +73,17 @@ def poll_research_once() -> int:
             headers = {"Authorization": f"Bearer {CYFIRMA_API_KEY}"} if CYFIRMA_API_KEY else {}
             resp = client.get(RESEARCH_URL, headers=headers); resp.raise_for_status()
             try: data = resp.json()
-            except ValueError: return 0
+            except ValueError as exc: raise ValueError("non-JSON research response") from exc
             items = data.get("items", data.get("articles", data if isinstance(data, list) else []))
             for item in items[:RESEARCH_MAX_ITEMS]:
                 title = item.get("title", "Untitled"); url = item.get("url", item.get("link", ""))
                 summary = item.get("summary", item.get("description", "")); published_at = item.get("published_at") or item.get("date")
                 if db.upsert_research_item(title=title, url=url, summary=summary, published_at=published_at, raw_payload=item): new_count += 1
         _stats["research_polls"] += 1; _stats["research_new"] += new_count
-    except Exception: _stats["research_errors"] += 1
+        _stats["research_last_success"] = datetime.now(timezone.utc).isoformat(); _stats["research_last_error"] = None
+    except Exception as exc:
+        _stats["research_errors"] += 1; _stats["research_last_error"] = _safe_error(exc)
+        logger.warning("CYFIRMA research poll failed: %s", _safe_error(exc))
     return new_count
 def research_loop() -> None:
     if not RESEARCH_ENABLED: return
@@ -87,7 +100,10 @@ def poll_taxii_once() -> int:
                 resp.raise_for_status(); data = resp.json(); objects = data.get("objects", []); object_count += len(objects)
                 next_url = data.get("next") or None
         _stats["taxii_polls"] += 1; _stats["taxii_objects"] += object_count
-    except Exception: _stats["taxii_errors"] += 1
+        _stats["taxii_last_success"] = datetime.now(timezone.utc).isoformat(); _stats["taxii_last_error"] = None
+    except Exception as exc:
+        _stats["taxii_errors"] += 1; _stats["taxii_last_error"] = _safe_error(exc)
+        logger.warning("CYFIRMA TAXII poll failed: %s", _safe_error(exc))
     return object_count
 def taxii_loop() -> None:
     if not TAXII_ENABLED: return

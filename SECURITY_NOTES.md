@@ -8,6 +8,8 @@ Your `.env` contains **live credentials** shared in chat. Action items:
 | `SOC_SMTP_PASSWORD` | Real mailbox password |
 | `M365_CLIENT_SECRET` / `DEFENDER_XDR_CLIENT_SECRET` | Real Entra app secret |
 | `DASHBOARD_ACCESS_TOKEN` | Dashboard access token |
+| Threat-intelligence API keys | Provider keys were shared in chat/editor context |
+| `AI_API_KEY` and any token embedded in `AI_PROVIDER_BASE_URL` | AI access credentials were shared in chat/editor context |
 
 ## 2. Verify not a copy-paste mistake
 `THREATFOX_API_KEY`, `URLHAUS_API_KEY`, `ABUSEIPDB_API_KEY` are identical strings — confirm each is correct.

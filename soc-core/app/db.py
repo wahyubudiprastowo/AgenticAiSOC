@@ -28,6 +28,19 @@ def _ensure_finding_schema() -> None:
             cur.execute("ALTER TABLE findings ADD COLUMN IF NOT EXISTS detection_source TEXT")
             cur.execute("ALTER TABLE findings ADD COLUMN IF NOT EXISTS updated_time TIMESTAMPTZ")
             cur.execute("CREATE UNIQUE INDEX IF NOT EXISTS uq_findings_primary_event ON findings (primary_event_id) WHERE primary_event_id IS NOT NULL")
+            cur.execute("""CREATE TABLE IF NOT EXISTS finding_indicators (
+                id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                finding_id UUID NOT NULL REFERENCES findings(id) ON DELETE CASCADE,
+                event_id UUID REFERENCES events(id) ON DELETE SET NULL,
+                ioc TEXT NOT NULL, ioc_type TEXT NOT NULL,
+                malicious BOOLEAN NOT NULL DEFAULT FALSE,
+                confidence NUMERIC(4,3) NOT NULL DEFAULT 0.0,
+                enrichment_status TEXT NOT NULL DEFAULT 'unknown', verdict_reason TEXT,
+                provider_results JSONB NOT NULL DEFAULT '[]'::jsonb,
+                checked_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+                UNIQUE (finding_id, ioc_type, ioc))""")
+            cur.execute("CREATE INDEX IF NOT EXISTS idx_finding_indicators_finding ON finding_indicators (finding_id)")
+            cur.execute("CREATE INDEX IF NOT EXISTS idx_finding_indicators_ioc ON finding_indicators (ioc_type, ioc)")
 def _finding_dict(row) -> dict:
     value = dict(row); event_ids = value.get("event_ids")
     if isinstance(event_ids, str):
@@ -113,11 +126,17 @@ def get_event(event_id: str) -> Optional[dict]:
         with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
             cur.execute("SELECT * FROM events WHERE id = %s", (event_id,)); row = cur.fetchone()
             return dict(row) if row else None
-def insert_deterministic_finding(event_id: str, event: dict, detection: dict) -> str:
+def insert_deterministic_finding(event_id: str, event: dict, detection: dict, ioc_hits: list[dict] | None = None) -> str:
     raw = event.get("raw_kv") or {}
+    indicators = [{"ioc": hit.get("ioc"), "ioc_type": hit.get("ioc_type"),
+                   "malicious": bool(hit.get("malicious")), "confidence": float(hit.get("confidence") or 0),
+                   "enrichment_status": hit.get("enrichment_status", "unknown"),
+                   "verdict_reason": hit.get("verdict_reason"), "providers": hit.get("providers") or []}
+                  for hit in (ioc_hits or [])]
     evidence = {"finding": event.get("description") or event.get("type"),
         "evidence": [f"{detection['rule_id']}: normalized event type '{event.get('type')}' matched deterministic detection"],
         "context": event.get("destination") or event.get("source"), "category_hint": detection["category"],
+        "indicators": indicators,
         "skill": None, "event": {"source": event.get("source"), "type": event.get("type"),
             "severity": event.get("severity"), "action": event.get("action"),
             "mitre_technique": event.get("mitre_technique") or [], "operation": raw.get("operation"),
@@ -143,6 +162,36 @@ def insert_deterministic_finding(event_id: str, event: dict, detection: dict) ->
             existing = cur.fetchone()
             if not existing: raise RuntimeError("deterministic finding conflict without existing row")
             return str(existing[0])
+def upsert_finding_indicators(finding_id: str, event_id: str, ioc_hits: list[dict]) -> None:
+    if not ioc_hits: return
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            for hit in ioc_hits:
+                if not hit.get("ioc") or not hit.get("ioc_type"): continue
+                cur.execute("""INSERT INTO finding_indicators
+                        (finding_id,event_id,ioc,ioc_type,malicious,confidence,enrichment_status,verdict_reason,provider_results)
+                    VALUES (%s::uuid,%s::uuid,%s,%s,%s,%s,%s,%s,%s)
+                    ON CONFLICT (finding_id,ioc_type,ioc) DO UPDATE SET
+                        event_id=EXCLUDED.event_id, malicious=EXCLUDED.malicious,
+                        confidence=EXCLUDED.confidence, enrichment_status=EXCLUDED.enrichment_status,
+                        verdict_reason=EXCLUDED.verdict_reason, provider_results=EXCLUDED.provider_results,
+                        checked_at=now()""",
+                    (finding_id, event_id, hit["ioc"], hit["ioc_type"], bool(hit.get("malicious")),
+                     float(hit.get("confidence") or 0), hit.get("enrichment_status", "unknown"),
+                     hit.get("verdict_reason"), json.dumps(hit.get("providers") or [])))
+def _attach_indicators(cur, finding: dict | None) -> dict | None:
+    if finding is None: return None
+    value = _finding_dict(finding)
+    cur.execute("""SELECT ioc,ioc_type,malicious,confidence,enrichment_status,verdict_reason,
+                    provider_results,checked_at FROM finding_indicators
+                WHERE finding_id=%s ORDER BY malicious DESC,ioc_type,ioc""", (value["id"],))
+    indicators = []
+    for row in cur.fetchall():
+        item = dict(row); item["confidence"] = float(item.get("confidence") or 0)
+        item["checked_at"] = item["checked_at"].isoformat() if item.get("checked_at") else None
+        indicators.append(item)
+    value["indicators"] = indicators
+    return value
 def list_findings(limit=50) -> list[dict]:
     with get_conn() as conn:
         with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
@@ -152,12 +201,12 @@ def get_finding(finding_id: str) -> Optional[dict]:
     with get_conn() as conn:
         with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
             cur.execute("SELECT * FROM findings WHERE id=%s", (finding_id,)); row = cur.fetchone()
-            return _finding_dict(row) if row else None
+            return _attach_indicators(cur, row)
 def get_finding_by_event_id(event_id: str) -> Optional[dict]:
     with get_conn() as conn:
         with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
             cur.execute("SELECT * FROM findings WHERE %s::uuid=ANY(event_ids) ORDER BY created_time DESC LIMIT 1", (event_id,))
-            row = cur.fetchone(); return _finding_dict(row) if row else None
+            row = cur.fetchone(); return _attach_indicators(cur, row)
 def findings_since(minutes=1440) -> list[dict]:
     with get_conn() as conn:
         with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:

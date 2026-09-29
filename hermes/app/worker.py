@@ -9,24 +9,30 @@ _APT_NAME_MARKERS = ("apt", "lazarus", "fancy bear", "cozy bear", "kimsuky", "tu
     "mustang panda", "apt28", "apt29", "apt41", "conti", "fin7", "carbanak", "equation group")
 def _detect_apt_indicator(ioc_hits: list[dict]) -> str | None:
     for hit in ioc_hits:
-        detail = (hit.get("detail") or "").lower()
-        for marker in _APT_NAME_MARKERS:
-            if marker in detail: return hit.get("detail")
+        candidates = [hit, *(hit.get("providers") or [])]
+        for candidate in candidates:
+            detail = str(candidate.get("detail") or "")
+            for marker in _APT_NAME_MARKERS:
+                if marker in detail.lower(): return detail
     return None
 def _get_apt_skill() -> dict | None:
     return next((s for s in load_skills() if s.get("skill") == "apt_activity"), None)
 def _build_evidence_object(event, triage, investigation, skill):
     evidence_lines = [f"EVT-{event.get('id')}: {event.get('description') or event.get('type')}"]
-    for hit in investigation.get("ioc_hits", []) or []:
+    indicators = investigation.get("ioc_hits", []) or []
+    for hit in indicators:
         verdict = "malicious" if hit.get("malicious") else "not flagged as malicious"
-        line = f"IOC-{hit.get('ioc', event.get('src_ip'))}: reputation check returned {verdict} (confidence={hit.get('confidence', hit.get('score', 0))})"
+        providers = ",".join(p.get("name", "unknown") for p in hit.get("providers", []) if p.get("mode") == "live") or "none-live"
+        line = (f"IOC-{hit.get('ioc', event.get('src_ip'))}: type={hit.get('ioc_type', 'ip')} "
+                f"reputation check returned {verdict} (confidence={hit.get('confidence', hit.get('score', 0))}; "
+                f"status={hit.get('enrichment_status', 'unknown')}; providers={providers})")
         if hit.get("detail"): line += f" [{hit['detail']}]"
         evidence_lines.append(line)
     if investigation.get("attack_chain"): evidence_lines.append(f"CHAIN: observed steps {investigation['attack_chain']}")
     raw_kv = event.get("raw_kv") or {}
     return {"finding": event.get("description") or f"{event.get('type')} on {event.get('destination')}",
             "evidence": evidence_lines, "context": event.get("destination") or event.get("source"),
-            "category_hint": triage.get("category"), "skill": (skill or {}).get("skill"),
+            "category_hint": triage.get("category"), "skill": (skill or {}).get("skill"), "indicators": indicators,
             "event": {"source": event.get("source"), "type": event.get("type"), "severity": event.get("severity"),
                       "action": event.get("action"), "mitre_technique": event.get("mitre_technique") or [],
                       "operation": raw_kv.get("operation"), "wazuh_rule_id": raw_kv.get("wazuh_rule_id"),
