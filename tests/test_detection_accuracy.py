@@ -31,6 +31,7 @@ skills = load_module("skill_loader_test", "hermes/app/skill_loader.py")
 providers = load_module("providers_test", "threat-intel/app/providers.py")
 dashboard_agg = load_module("dashboard_aggregations_test", "dashboard/app/aggregations.py")
 memory = load_module("hermes_memory_test", "hermes/app/memory.py")
+detections = load_module("soc_detections_test", "soc-core/app/detections.py")
 
 
 class M365NormalizerTests(unittest.TestCase):
@@ -109,18 +110,61 @@ class SkillRoutingTests(unittest.TestCase):
 
     def test_structured_routes(self):
         cases = [
+            ({"type": "malware", "description": "MalwareDetected", "raw_kv": {}}, "malware"),
             ({"type": "credential_attack", "description": "Correlated credential failures", "mitre_technique": ["T1110"]}, "brute_force"),
+            ({"type": "phishing", "description": "Suspicious phishing email", "raw_kv": {}}, "phishing"),
+            ({"type": "network_attack", "description": "Fortigate IPS attack dropped", "raw_kv": {}}, "suspicious_network"),
+            ({"type": "reconnaissance", "description": "Nmap port scan detected", "raw_kv": {}}, "reconnaissance"),
+            ({"type": "vulnerability", "description": "CVE-9999-0001 vulnerable package", "raw_kv": {}}, "vulnerability_management"),
             ({"type": "mailbox_rule_change", "description": "Exchange: New-InboxRule", "raw_kv": {"operation": "New-InboxRule"}}, "phishing"),
+            ({"type": "oauth_consent", "description": "Consent to application", "raw_kv": {"operation": "Consent to application"}}, "phishing"),
             ({"type": "privilege_change", "description": "Add member", "raw_kv": {"operation": "Add member to role"}}, "m365_identity_compromise"),
             ({"type": "ransomware", "description": "Ransomware", "mitre_technique": ["T1486"]}, "ransomware"),
             ({"type": "fim_change", "description": "FIM: modified /etc/passwd", "raw_kv": {"wazuh_rule_groups": ["syscheck"]}}, "file_integrity"),
             ({"type": "fim_change", "description": "FIM: modified /app/node_modules/a.js", "raw_kv": {"wazuh_rule_groups": ["syscheck"]}}, "supply_chain"),
+            ({"type": "dos_attack", "description": "SYN flood", "raw_kv": {}}, "ddos"),
+            ({"type": "web_attack", "description": "SQL injection UNION SELECT", "raw_kv": {}}, "sql_injection"),
+            ({"type": "insider_risk", "description": "Correlated bulk download", "raw_kv": {}}, "insider_threat"),
+            ({"type": "data_exfiltration", "description": "DLP rule match", "raw_kv": {}}, "data_exfiltration"),
+            ({"type": "security_alert", "description": "APT29 attributed threat actor", "raw_kv": {}}, "apt_activity"),
             ({"type": "zero_day", "description": "CVE-2026-0001 vendor fix unavailable", "raw_kv": {"is_zero_day": True}}, "zero_day"),
+            ({"type": "cloud_alert", "description": "AWS root UnauthorizedAccess", "raw_kv": {}}, "cloud_native"),
+            ({"type": "k8s_alert", "description": "Privileged container hostPath mount", "raw_kv": {}}, "container_kubernetes"),
             ({"type": "security_alert", "description": "possible pass-the-hash attack", "mitre_technique": ["T1550.002"]}, "credential_access"),
             ({"type": "security_alert", "description": "WMI query for System Information Discovery", "mitre_technique": ["T1082", "T1047"]}, "endpoint_discovery"),
         ]
         for event, expected in cases:
             with self.subTest(expected=expected): self.assertEqual(self.route(event), expected)
+
+
+class DeterministicFindingTests(unittest.TestCase):
+    def test_primary_categories_survive_without_ai(self):
+        cases = [
+            ({"type": "malware"}, "malware"), ({"type": "ransomware"}, "ransomware"),
+            ({"type": "phishing"}, "phishing"), ({"type": "credential_attack"}, "credential_attack"),
+            ({"type": "oauth_consent"}, "phishing"),
+            ({"type": "privilege_change"}, "credential_attack"),
+            ({"type": "network_attack"}, "suspicious_network"),
+            ({"type": "reconnaissance"}, "reconnaissance"),
+            ({"type": "vulnerability"}, "vulnerability_management"),
+            ({"type": "fim_change", "description": "FIM: /etc/passwd"}, "file_integrity"),
+            ({"type": "fim_change", "description": "FIM: /app/node_modules/a.js"}, "supply_chain"),
+            ({"type": "dos_attack"}, "ddos"), ({"type": "web_attack"}, "sql_injection"),
+            ({"type": "insider_risk"}, "insider_threat"),
+            ({"type": "data_exfiltration"}, "data_exfiltration"),
+            ({"type": "security_alert", "description": "APT29 attributed threat actor"}, "apt_activity"),
+            ({"type": "security_alert", "description": "Defender CommandAndControl alert"}, "suspicious_network"),
+            ({"type": "security_alert", "description": "Defender ransomware alert"}, "ransomware"),
+            ({"type": "zero_day"}, "zero_day"), ({"type": "cloud_alert"}, "cloud_native"),
+            ({"type": "k8s_alert"}, "container_kubernetes"),
+        ]
+        for event, expected in cases:
+            event.setdefault("severity", "high"); event.setdefault("raw_kv", {})
+            with self.subTest(expected=expected):
+                self.assertEqual(detections.classify(event)["category"], expected)
+
+    def test_generic_event_does_not_create_deterministic_finding(self):
+        self.assertIsNone(detections.classify({"type": "generic", "description": "routine audit", "raw_kv": {}}))
 
 
 class ThreatIntelSafetyTests(unittest.TestCase):

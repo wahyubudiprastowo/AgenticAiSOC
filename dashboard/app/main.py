@@ -142,8 +142,8 @@ async def _gather_raw_data() -> dict:
             _safe_get(client, f"{SOC_CORE_URL}/stats", {}),
             _safe_get(client, f"{SOC_CORE_URL}/events?limit=300", {"events": []}),
             _safe_get(client, f"{SOC_CORE_URL}/analytics/timeline?hours=24", {"buckets": []}),
-            _safe_get(client, f"{HERMES_URL}/findings?limit=200", {"findings": []}),
-            _safe_get(client, f"{HERMES_URL}/findings/recent-window?minutes={FINDINGS_WINDOW_MINUTES}", {"findings": []}),
+            _safe_get(client, f"{SOC_CORE_URL}/findings?limit=200", {"findings": []}),
+            _safe_get(client, f"{SOC_CORE_URL}/findings/recent-window?minutes={FINDINGS_WINDOW_MINUTES}", {"findings": []}),
             _safe_get(client, f"{M365_COLLECTOR_URL}/stats", {}),
             _safe_get(client, f"{THREAT_INTEL_URL}/providers", {}),
             _safe_get(client, f"{THREAT_INTEL_URL}/feeds/stats", {}),
@@ -175,8 +175,8 @@ async def api_filtered_overview(start: datetime | None = None, end: datetime | N
     try:
         async with httpx.AsyncClient() as client:
             core_request = client.get(f"{SOC_CORE_URL}/analytics/overview", params={**params, "limit": 25}, timeout=10.0)
-            findings_request = client.get(f"{HERMES_URL}/findings/search", params={**params, "limit": 200, "offset": 0}, timeout=10.0)
-            analytics_request = client.get(f"{HERMES_URL}/findings/analytics", params=params, timeout=10.0)
+            findings_request = client.get(f"{SOC_CORE_URL}/findings/search", params={**params, "limit": 200, "offset": 0}, timeout=10.0)
+            analytics_request = client.get(f"{SOC_CORE_URL}/findings/analytics", params=params, timeout=10.0)
             core_response, findings_response, analytics_response = await asyncio.gather(
                 core_request, findings_request, analytics_request)
             for response in (core_response, findings_response, analytics_response): response.raise_for_status()
@@ -201,38 +201,52 @@ async def api_filtered_overview(start: datetime | None = None, end: datetime | N
         "recent_findings": findings[:25], "recent_events": core.get("events", [])[:25],
         "top_iocs": agg.top_malicious_iocs(findings), "apt_attributions": agg.apt_attributions(findings),
         "bucket": bucket}
-async def _hermes_filtered(path: str, start: datetime | None, end: datetime | None, severity: str | None,
-                           category: str | None, q: str | None, **extra) -> dict:
+async def _findings_filtered(path: str, start: datetime | None, end: datetime | None, severity: str | None,
+                             category: str | None, q: str | None, **extra) -> dict:
     if start and end and start > end: raise HTTPException(status_code=400, detail="start must be before end")
     params = {key: value for key, value in {"start": start.isoformat() if start else None,
         "end": end.isoformat() if end else None, "severity": severity, "category": category, "q": q, **extra}.items()
         if value not in (None, "")}
     try:
         async with httpx.AsyncClient() as client:
-            response = await client.get(f"{HERMES_URL}{path}", params=params, timeout=max(DASHBOARD_UPSTREAM_TIMEOUT_SECONDS, 10.0))
+            response = await client.get(f"{SOC_CORE_URL}{path}", params=params, timeout=max(DASHBOARD_UPSTREAM_TIMEOUT_SECONDS, 10.0))
             if response.status_code == 400: raise HTTPException(status_code=400, detail=response.json().get("detail", "invalid filter"))
             response.raise_for_status(); return response.json()
     except HTTPException: raise
     except Exception as exc:
-        logger.warning("Hermes filtered query failed: %s", exc)
+        logger.warning("SOC Core finding query failed: %s", exc)
         raise HTTPException(status_code=502, detail="finding search service unavailable")
 @app.get("/api/findings/search")
 async def api_findings_search(start: datetime | None = None, end: datetime | None = None,
                               limit: int = Query(100, ge=1, le=200), offset: int = Query(0, ge=0),
                               severity: str | None = None, category: str | None = None, q: str | None = None) -> dict:
-    return await _hermes_filtered("/findings/search", start, end, severity, category, q, limit=limit, offset=offset)
+    return await _findings_filtered("/findings/search", start, end, severity, category, q, limit=limit, offset=offset)
 @app.get("/api/findings/analytics")
 async def api_findings_analytics(start: datetime | None = None, end: datetime | None = None,
                                  bucket: str = Query("hour", pattern="^(hour|day|week|month|year)$"),
                                  severity: str | None = None, category: str | None = None, q: str | None = None) -> dict:
-    return await _hermes_filtered("/findings/analytics", start, end, severity, category, q, bucket=bucket)
+    return await _findings_filtered("/findings/analytics", start, end, severity, category, q, bucket=bucket)
+@app.get("/api/findings/by-event/{event_id}")
+async def api_finding_by_event(event_id: str) -> dict:
+    try: canonical_id = str(UUID(event_id))
+    except ValueError: raise HTTPException(status_code=400, detail="invalid event id")
+    try:
+        async with httpx.AsyncClient() as client:
+            response = await client.get(f"{SOC_CORE_URL}/findings/by-event/{canonical_id}", timeout=max(DASHBOARD_UPSTREAM_TIMEOUT_SECONDS, 10.0))
+            if response.status_code == 404: raise HTTPException(status_code=404, detail="finding not found for event")
+            response.raise_for_status()
+            return response.json()
+    except HTTPException: raise
+    except Exception as exc:
+        logger.warning("Finding lookup by event unavailable for %s: %s", canonical_id, exc)
+        raise HTTPException(status_code=502, detail="finding lookup service unavailable")
 @app.get("/api/findings/{finding_id}")
 async def api_finding_detail(finding_id: str) -> dict:
     try: canonical_id = str(UUID(finding_id))
     except ValueError: raise HTTPException(status_code=400, detail="invalid finding id")
     async with httpx.AsyncClient() as client:
         try:
-            response = await client.get(f"{HERMES_URL}/findings/detail/{canonical_id}", timeout=DASHBOARD_UPSTREAM_TIMEOUT_SECONDS)
+            response = await client.get(f"{SOC_CORE_URL}/findings/detail/{canonical_id}", timeout=DASHBOARD_UPSTREAM_TIMEOUT_SECONDS)
             if response.status_code == 404: raise HTTPException(status_code=404, detail="finding not found")
             response.raise_for_status(); finding = response.json()
         except HTTPException: raise

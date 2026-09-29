@@ -1,6 +1,6 @@
 # Agentic AI SOC Platform — Coordination Audit Report (v4)
 
-**Status:** 72 PASS / 1 WARN (non-blocking) / 0 FAIL
+**Status:** 75 PASS / 0 WARN / 0 FAIL
 **Verify anytime:** `python3 scripts/audit_verify.py`
 
 ## Summary
@@ -11,6 +11,12 @@
 - v4 (this revision): unique host-port scheme (+30000 offset) to
   eliminate collision with existing wazuh-mcp-unified stack, plus
   automated Section 10 port-collision audit.
+- Resilience patch: SOC Core now persists deterministic findings before
+  optional Hermes/Jev processing. Dashboard finding queries remain available
+  during a Hermes outage, and Hermes enriches the same finding ID after recovery.
+- Evidence validation: 14/14 testable automatic normalized categories and 2/2
+  manual-ingest categories produced findings linked to their exact event UUID.
+  Zero-Day remains explicitly non-testable automatically.
 
 ## Port Collision Matrix — Verified
 | Port | Service | Collides? |
@@ -53,7 +59,4 @@ keywords). Cloud-Native/Container-K8s honestly labeled manual-ingest-only.
 ```bash
 python3 scripts/audit_verify.py
 ```
-Expected: `SUMMARY: 72 PASS, 1 WARN, 0 FAIL`. The 1 warning
-(`phishing` skill's `event_types: [phishing]` has no automated
-normalizer producing that literal type) is a reviewed, non-blocking
-design characteristic.
+Expected: `SUMMARY: 75 PASS, 0 WARN, 0 FAIL`.

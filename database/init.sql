@@ -23,11 +23,14 @@ CREATE TABLE IF NOT EXISTS findings (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(), event_ids UUID[] NOT NULL, category TEXT,
     threat_classification TEXT, mitre_technique TEXT[], confidence NUMERIC(4,3) NOT NULL DEFAULT 0.0,
     severity TEXT, evidence JSONB NOT NULL, ai_result JSONB NOT NULL, recommendation TEXT,
-    status TEXT NOT NULL DEFAULT 'open', created_time TIMESTAMPTZ NOT NULL DEFAULT now()
+    status TEXT NOT NULL DEFAULT 'open', created_time TIMESTAMPTZ NOT NULL DEFAULT now(),
+    primary_event_id UUID, analysis_status TEXT NOT NULL DEFAULT 'complete',
+    detection_rule TEXT, detection_source TEXT, updated_time TIMESTAMPTZ
 );
 CREATE INDEX IF NOT EXISTS idx_findings_category ON findings (category);
 CREATE INDEX IF NOT EXISTS idx_findings_severity ON findings (severity);
 CREATE INDEX IF NOT EXISTS idx_findings_created ON findings (created_time DESC);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_findings_primary_event ON findings (primary_event_id) WHERE primary_event_id IS NOT NULL;
 CREATE TABLE IF NOT EXISTS agent_runs (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(), agent_name TEXT NOT NULL,
     finding_id UUID REFERENCES findings(id) ON DELETE CASCADE, input_payload JSONB,

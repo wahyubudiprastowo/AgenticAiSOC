@@ -53,8 +53,6 @@ services:
         condition: service_healthy
       postgres:
         condition: service_healthy
-      threat-intel:
-        condition: service_healthy
     networks:
       - agentic-soc-net
       - wazuh-shared-net
@@ -83,12 +81,6 @@ services:
       redis:
         condition: service_healthy
       postgres:
-        condition: service_healthy
-      jev:
-        condition: service_healthy
-      threat-intel:
-        condition: service_healthy
-      qdrant:
         condition: service_healthy
     networks:
       - agentic-soc-net
@@ -156,8 +148,6 @@ services:
       - "${DASHBOARD_HOST_PORT:-38080}:8080"
     depends_on:
       soc-core:
-        condition: service_healthy
-      hermes:
         condition: service_healthy
     networks:
       - agentic-soc-net

@@ -31,4 +31,4 @@ expose to the public internet.
 ## 6. General hygiene
 - `chmod 600 .env`
 - Re-run `python3 scripts/audit_verify.py` after any config change
-  (expect: 72 PASS / 1 WARN / 0 FAIL)
+  (expect: 75 PASS / 0 WARN / 0 FAIL)

@@ -32,6 +32,39 @@ async def get_event(event_id: str):
     event = db.get_event(event_id)
     if not event: raise HTTPException(status_code=404, detail="event not found")
     return event
+@app.get("/findings")
+async def get_findings(limit: int = Query(50, ge=1, le=200)):
+    findings = db.list_findings(limit); return {"count": len(findings), "findings": findings}
+@app.get("/findings/recent-window")
+async def findings_recent_window(minutes: int = Query(1440, ge=1)):
+    findings = db.findings_since(minutes); return {"count": len(findings), "findings": findings}
+@app.get("/findings/search")
+async def findings_search(start: datetime | None = None, end: datetime | None = None,
+                          limit: int = Query(100, ge=1, le=200), offset: int = Query(0, ge=0),
+                          severity: str | None = None, category: str | None = None, q: str | None = None):
+    if start and end and start > end: raise HTTPException(status_code=400, detail="start must be before end")
+    findings, total = db.search_findings(start, end, limit, offset, severity, category, q)
+    return {"count": len(findings), "total": total, "limit": limit, "offset": offset, "findings": findings}
+@app.get("/findings/analytics")
+async def findings_analytics(start: datetime | None = None, end: datetime | None = None,
+                             bucket: str = Query("hour", pattern="^(hour|day|week|month|year)$"),
+                             severity: str | None = None, category: str | None = None, q: str | None = None):
+    if start and end and start > end: raise HTTPException(status_code=400, detail="start must be before end")
+    return db.findings_analytics(start, end, bucket, severity, category, q)
+@app.get("/findings/by-event/{event_id}")
+async def finding_by_event(event_id: str):
+    try: canonical_id = str(uuid.UUID(event_id))
+    except ValueError: raise HTTPException(status_code=400, detail="invalid event id")
+    finding = db.get_finding_by_event_id(canonical_id)
+    if not finding: raise HTTPException(status_code=404, detail="finding not found for event")
+    return finding
+@app.get("/findings/detail/{finding_id}")
+async def finding_detail(finding_id: str):
+    try: canonical_id = str(uuid.UUID(finding_id))
+    except ValueError: raise HTTPException(status_code=400, detail="invalid finding id")
+    finding = db.get_finding(canonical_id)
+    if not finding: raise HTTPException(status_code=404, detail="finding not found")
+    return finding
 @app.get("/analytics/timeline")
 async def get_timeline(hours: int = 24): return {"hours": hours, "buckets": db.timeline_buckets(hours=hours)}
 @app.get("/analytics/overview")
@@ -50,14 +83,22 @@ class IngestEventRequest(BaseModel):
     src_ip: Optional[str] = None
     destination: Optional[str] = None
     user_name: Optional[str] = None
+    test_marker: Optional[str] = None
+    is_synthetic_test: bool = False
     raw: Optional[dict] = None
 @app.post("/events/ingest")
 async def ingest_event(payload: IngestEventRequest):
-    raw_payload = payload.raw or {"description": payload.description}
+    raw_payload = dict(payload.raw or {})
+    raw_payload.setdefault("description", payload.description)
+    if payload.test_marker:
+        raw_payload["test_marker"] = payload.test_marker
+    if payload.is_synthetic_test:
+        raw_payload["is_synthetic_test"] = True
     event = {"id": f"evt-ingest-{uuid.uuid4().hex[:10]}", "source": payload.source, "type": payload.type,
         "severity": payload.severity, "src_ip": payload.src_ip, "destination": payload.destination,
         "user_name": payload.user_name, "description": payload.description, "mitre_technique": payload.mitre_technique or [],
         "time": datetime.now(timezone.utc).isoformat(), "raw": raw_payload,
-        "raw_hash": hashlib.sha256(json.dumps(raw_payload, sort_keys=True).encode()).hexdigest(), "raw_kv": {}}
+        "raw_hash": hashlib.sha256(json.dumps(raw_payload, sort_keys=True).encode()).hexdigest(),
+        "raw_kv": raw_payload}
     event_uuid = worker.process_event(event)
     return {"status": "ingested", "event_id": event["id"], "db_id": event_uuid}

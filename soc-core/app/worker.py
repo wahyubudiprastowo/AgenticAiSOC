@@ -1,6 +1,6 @@
 from __future__ import annotations
 import ipaddress, logging, os, time
-from . import correlation, db, filters, redis_client, wazuh_client, threat_intel_client
+from . import correlation, db, detections, filters, redis_client, wazuh_client, threat_intel_client
 logger = logging.getLogger("soc-core.worker")
 WAZUH_POLL_INTERVAL_SECONDS = int(os.getenv("WAZUH_POLL_INTERVAL_SECONDS", "30"))
 WAZUH_FIM_POLL_INTERVAL_SECONDS = int(os.getenv("WAZUH_FIM_POLL_INTERVAL_SECONDS", "60"))
@@ -43,6 +43,9 @@ def process_event(event: dict) -> str:
     db.update_event_decision(event_uuid, event)
     if forward:
         enriched = dict(event); enriched["db_id"] = event_uuid; enriched["ioc_hits"] = ioc_hits
+        detection = detections.classify(event)
+        if detection:
+            enriched["finding_id"] = db.insert_deterministic_finding(event_uuid, event, detection)
         redis_client.push_filtered_event(enriched)
     return event_uuid
 def _process_event(event: dict) -> None:

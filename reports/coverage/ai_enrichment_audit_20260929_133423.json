@@ -1,0 +1,169 @@
+{
+  "source_report": "reports/coverage/coverage_validation_report_20260929_133423.json",
+  "checked_categories": 16,
+  "complete": 16,
+  "same_finding_id": 16,
+  "marker_preserved": 16,
+  "results": [
+    {
+      "category_no": 1,
+      "event_id": "12a65994-9305-489c-aa68-1e8f5ca4e8bc",
+      "finding_id_before": "8ff2fd74-d74b-46f0-b3f8-b019462be59a",
+      "finding_id_after": "8ff2fd74-d74b-46f0-b3f8-b019462be59a",
+      "same_finding_id": true,
+      "category": "malware",
+      "analysis_status": "complete",
+      "marker_present": true
+    },
+    {
+      "category_no": 2,
+      "event_id": "e0fba84b-3626-4eb8-8108-a63d9f9fc4ad",
+      "finding_id_before": "d74f1e35-a63c-47aa-93fd-9c5db737e141",
+      "finding_id_after": "d74f1e35-a63c-47aa-93fd-9c5db737e141",
+      "same_finding_id": true,
+      "category": "ransomware",
+      "analysis_status": "complete",
+      "marker_present": true
+    },
+    {
+      "category_no": 3,
+      "event_id": "59db5617-9e45-4ba6-8115-f733a7a102f3",
+      "finding_id_before": "2032db33-54a1-42ad-8bb2-180fbc317ebe",
+      "finding_id_after": "2032db33-54a1-42ad-8bb2-180fbc317ebe",
+      "same_finding_id": true,
+      "category": "phishing",
+      "analysis_status": "complete",
+      "marker_present": true
+    },
+    {
+      "category_no": 4,
+      "event_id": "6fc66207-c440-45d0-a60a-f9eadbbbd726",
+      "finding_id_before": "f035d8e6-5869-42aa-a944-6eaf53f5c89e",
+      "finding_id_after": "f035d8e6-5869-42aa-a944-6eaf53f5c89e",
+      "same_finding_id": true,
+      "category": "credential_attack",
+      "analysis_status": "complete",
+      "marker_present": true
+    },
+    {
+      "category_no": 5,
+      "event_id": "9448b081-3bf5-497e-9d6c-6c7c50c8d535",
+      "finding_id_before": "ae222b19-d13b-4377-8028-cb79f7de0795",
+      "finding_id_after": "ae222b19-d13b-4377-8028-cb79f7de0795",
+      "same_finding_id": true,
+      "category": "suspicious_network",
+      "analysis_status": "complete",
+      "marker_present": true
+    },
+    {
+      "category_no": 6,
+      "event_id": "be39cdc0-6b8f-442c-a0a7-8817c9ef44e2",
+      "finding_id_before": "abd51fcd-742b-4712-9268-e0c7fe17cc3f",
+      "finding_id_after": "abd51fcd-742b-4712-9268-e0c7fe17cc3f",
+      "same_finding_id": true,
+      "category": "reconnaissance",
+      "analysis_status": "complete",
+      "marker_present": true
+    },
+    {
+      "category_no": 7,
+      "event_id": "f5920149-5955-4a1e-a42c-bcd8be2cda29",
+      "finding_id_before": "57fa3ed6-a126-4ae9-96c3-f755a75ac35f",
+      "finding_id_after": "57fa3ed6-a126-4ae9-96c3-f755a75ac35f",
+      "same_finding_id": true,
+      "category": "vulnerability_management",
+      "analysis_status": "complete",
+      "marker_present": true
+    },
+    {
+      "category_no": 8,
+      "event_id": "99077ef9-0676-4a5e-8dc9-0b353d986e61",
+      "finding_id_before": "7732cf44-d0d5-4b03-870d-b75ae3c8f8e4",
+      "finding_id_after": "7732cf44-d0d5-4b03-870d-b75ae3c8f8e4",
+      "same_finding_id": true,
+      "category": "file_integrity",
+      "analysis_status": "complete",
+      "marker_present": true
+    },
+    {
+      "category_no": 9,
+      "event_id": "887ae347-621a-4925-bb97-cb34a9c479bf",
+      "finding_id_before": "abfc4f03-fd6a-4f83-bc35-73a73af32c9d",
+      "finding_id_after": "abfc4f03-fd6a-4f83-bc35-73a73af32c9d",
+      "same_finding_id": true,
+      "category": "supply_chain",
+      "analysis_status": "complete",
+      "marker_present": true
+    },
+    {
+      "category_no": 10,
+      "event_id": "6bad9862-2400-4b61-b794-689d205034ac",
+      "finding_id_before": "728a32b5-3381-4e8a-a486-9c8c3f16c8bd",
+      "finding_id_after": "728a32b5-3381-4e8a-a486-9c8c3f16c8bd",
+      "same_finding_id": true,
+      "category": "ddos",
+      "analysis_status": "complete",
+      "marker_present": true
+    },
+    {
+      "category_no": 11,
+      "event_id": "fe086466-a000-4cce-8193-9129fe36192f",
+      "finding_id_before": "9818f5a0-8ebf-4ac3-a91f-69ab69041e27",
+      "finding_id_after": "9818f5a0-8ebf-4ac3-a91f-69ab69041e27",
+      "same_finding_id": true,
+      "category": "sql_injection",
+      "analysis_status": "complete",
+      "marker_present": true
+    },
+    {
+      "category_no": 12,
+      "event_id": "1993808e-0cea-4034-88a2-8512a9558f35",
+      "finding_id_before": "a4472d3c-cc6b-4e48-b979-90d1c27ba6f7",
+      "finding_id_after": "a4472d3c-cc6b-4e48-b979-90d1c27ba6f7",
+      "same_finding_id": true,
+      "category": "insider_threat",
+      "analysis_status": "complete",
+      "marker_present": true
+    },
+    {
+      "category_no": 13,
+      "event_id": "e8f4a93a-9d74-49f2-a346-839c28800b44",
+      "finding_id_before": "326f1ff3-8887-4263-ba42-61ba50ffa492",
+      "finding_id_after": "326f1ff3-8887-4263-ba42-61ba50ffa492",
+      "same_finding_id": true,
+      "category": "data_exfiltration",
+      "analysis_status": "complete",
+      "marker_present": true
+    },
+    {
+      "category_no": 14,
+      "event_id": "fcd2e312-c3a7-498d-99e4-7aae580c578b",
+      "finding_id_before": "f8bd102c-2497-4f62-9eb1-94ceae39568f",
+      "finding_id_after": "f8bd102c-2497-4f62-9eb1-94ceae39568f",
+      "same_finding_id": true,
+      "category": "apt_activity",
+      "analysis_status": "complete",
+      "marker_present": true
+    },
+    {
+      "category_no": 16,
+      "event_id": "ba983e66-5dbb-4a25-a264-dc2484dfb472",
+      "finding_id_before": "55bedade-e4da-46c8-ab6e-f57164f10484",
+      "finding_id_after": "55bedade-e4da-46c8-ab6e-f57164f10484",
+      "same_finding_id": true,
+      "category": "cloud_native",
+      "analysis_status": "complete",
+      "marker_present": true
+    },
+    {
+      "category_no": 17,
+      "event_id": "6e7abb7b-a7bd-4b7c-9e92-bbbb7f0f8767",
+      "finding_id_before": "6eb22cff-ddd1-482d-a342-d0e5cd5235b6",
+      "finding_id_after": "6eb22cff-ddd1-482d-a342-d0e5cd5235b6",
+      "same_finding_id": true,
+      "category": "container_kubernetes",
+      "analysis_status": "complete",
+      "marker_present": true
+    }
+  ]
+}

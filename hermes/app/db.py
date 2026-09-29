@@ -17,7 +17,9 @@ def _finding_dict(row) -> dict:
     return value
 def init_pool(minconn=1, maxconn=5):
     global _pool
-    if _pool is None: _pool = psycopg2.pool.SimpleConnectionPool(minconn, maxconn, dsn=DATABASE_URL)
+    if _pool is None:
+        _pool = psycopg2.pool.ThreadedConnectionPool(minconn, maxconn, dsn=DATABASE_URL)
+        _ensure_finding_schema()
 @contextmanager
 def get_conn():
     if _pool is None: init_pool()
@@ -25,6 +27,15 @@ def get_conn():
     try: yield conn; conn.commit()
     except Exception: conn.rollback(); raise
     finally: _pool.putconn(conn)
+def _ensure_finding_schema() -> None:
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute("ALTER TABLE findings ADD COLUMN IF NOT EXISTS primary_event_id UUID")
+            cur.execute("ALTER TABLE findings ADD COLUMN IF NOT EXISTS analysis_status TEXT NOT NULL DEFAULT 'complete'")
+            cur.execute("ALTER TABLE findings ADD COLUMN IF NOT EXISTS detection_rule TEXT")
+            cur.execute("ALTER TABLE findings ADD COLUMN IF NOT EXISTS detection_source TEXT")
+            cur.execute("ALTER TABLE findings ADD COLUMN IF NOT EXISTS updated_time TIMESTAMPTZ")
+            cur.execute("CREATE UNIQUE INDEX IF NOT EXISTS uq_findings_primary_event ON findings (primary_event_id) WHERE primary_event_id IS NOT NULL")
 def insert_finding(event_ids, category, threat_classification, mitre_technique, confidence, severity, evidence, ai_result, recommendation) -> str:
     with get_conn() as conn:
         with conn.cursor() as cur:
@@ -32,6 +43,16 @@ def insert_finding(event_ids, category, threat_classification, mitre_technique, 
                     confidence, severity, evidence, ai_result, recommendation) VALUES (%s::uuid[], %s, %s, %s, %s, %s, %s, %s, %s) RETURNING id;""",
                 (event_ids, category, threat_classification, mitre_technique, confidence, severity, json.dumps(evidence), json.dumps(ai_result), recommendation))
             return str(cur.fetchone()[0])
+def enrich_finding(finding_id, category, threat_classification, mitre_technique, confidence, severity,
+                   evidence, ai_result, recommendation) -> bool:
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute("""UPDATE findings SET category=%s, threat_classification=%s, mitre_technique=%s,
+                    confidence=%s, severity=%s, evidence=%s, ai_result=%s, recommendation=%s,
+                    analysis_status='complete', updated_time=now() WHERE id=%s""",
+                (category, threat_classification, mitre_technique, confidence, severity,
+                 json.dumps(evidence), json.dumps(ai_result), recommendation, finding_id))
+            return cur.rowcount == 1
 def log_agent_run(agent_name, finding_id, input_payload, output_payload, duration_ms) -> None:
     with get_conn() as conn:
         with conn.cursor() as cur:
@@ -45,6 +66,13 @@ def get_finding(finding_id: str) -> Optional[dict]:
     with get_conn() as conn:
         with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
             cur.execute("SELECT * FROM findings WHERE id = %s", (finding_id,)); row = cur.fetchone()
+            return _finding_dict(row) if row else None
+def get_finding_by_event_id(event_id: str) -> Optional[dict]:
+    with get_conn() as conn:
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            cur.execute("""SELECT * FROM findings WHERE %s::uuid = ANY(event_ids)
+                        ORDER BY created_time DESC LIMIT 1""", (event_id,))
+            row = cur.fetchone()
             return _finding_dict(row) if row else None
 def findings_since(minutes=1440) -> list[dict]:
     with get_conn() as conn:

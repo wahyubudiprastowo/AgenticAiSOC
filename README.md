@@ -79,6 +79,57 @@ curl --get http://localhost:38080/api/findings/analytics \
   --data-urlencode 'bucket=day'
 ```
 
+## Evidence-based detection coverage validation
+
+`scripts/validate_detection_coverage.py` validates a finding against the exact
+database event UUID returned by SOC Core. A category passes only when the
+finding links that UUID, has the expected deterministic category, and contains the
+unique test marker in its evidence. This prevents an unrelated recent finding
+from producing a false PASS.
+
+Set up the isolated validator dependencies and review all payloads first:
+
+```bash
+python3 -m venv .venv
+.venv/bin/pip install -r scripts/requirements-coverage.txt
+.venv/bin/python scripts/validate_detection_coverage.py \
+  --matrix Coverage_Matrix_17_Kategori_Serangan.xlsx \
+  --init-matrix --dry-run
+```
+
+Run the live normalized-pipeline validation:
+
+```bash
+.venv/bin/python scripts/validate_detection_coverage.py \
+  --matrix Coverage_Matrix_17_Kategori_Serangan.xlsx \
+  --soc-core-url http://localhost:48200 \
+  --dashboard-url http://localhost:38080 \
+  --timeout 60 --interval 2
+```
+
+Outputs are written to `reports/coverage/`, plus
+`Coverage_Matrix_17_Kategori_Serangan.validated.xlsx`. The current verified
+result is **14/14 testable automated normalized categories PASS**, **2/2
+manual-ingest categories PASS**, and **Zero-Day not testable automatically**.
+The companion AI-enrichment audit confirms all 16 testable findings reached
+`complete` while retaining the same event UUID, finding ID, and evidence marker.
+
+This test proves normalized ingestion, deterministic finding persistence, and
+traceability. The report records whether optional AI enrichment is still pending
+or complete. It does not prove source-sensor efficacy. Fortigate, Wazuh,
+M365, Defender, Purview, and threat-intelligence collectors still require
+separate source-level tests using safe lab events and real parser output.
+
+## Finding resilience when AI services are unavailable
+
+SOC Core stores a deterministic finding before an event enters the Hermes queue.
+The finding is immediately available to Overview and Attack Details with
+`analysis_status=pending_ai`. Hermes later enriches that same finding and changes
+the status to `complete`; it does not create a second finding. Dashboard finding
+queries use SOC Core, so a Hermes, Jev, Qdrant, or threat-intelligence outage does
+not hide already stored findings. Existing rows are preserved by additive schema
+changes and are treated as complete.
+
 ## Syslog Port Forwarding — Reconfiguration Required
 
 Moving the syslog port does NOT automatically redirect any network
@@ -110,7 +161,7 @@ should increase once a real device is sending to port 36514.
 | 12 | Insider Threat | M365 mass-download ops | Automated |
 | 13 | Data Exfiltration | Microsoft Purview DLP | Automated |
 | 14 | APT Activity | OTX/ThreatFox attribution | Automated |
-| 15 | Zero-Day | Wazuh unfixed + CYFIRMA | Automated |
+| 15 | Zero-Day | Wazuh unfixed + CYFIRMA | Probabilistic / manual review |
 | 16 | Cloud-Native | Manual `/events/ingest` | Manual only |
 | 17 | Container/Kubernetes | Manual `/events/ingest` | Manual only |
 

@@ -32,6 +32,10 @@ def find_getenv_calls(f: Path):
     pattern = re.compile(r'os\.getenv\(\s*"([A-Z0-9_]+)"\s*(?:,\s*(.*?))?\)')
     return [(m.group(1), m.group(2)) for m in pattern.finditer(text)]
 
+def project_python_files():
+    excluded_parts = {".git", ".venv", "venv", "env", "__pycache__"}
+    return (path for path in ROOT.rglob("*.py") if not excluded_parts.intersection(path.relative_to(ROOT).parts))
+
 def audit_section_1():
     section("SECTION 1: Docker Compose <-> .env <-> Inter-Service URLs")
     compose = yaml.safe_load((ROOT / "docker-compose.yml").read_text())
@@ -41,8 +45,8 @@ def audit_section_1():
     ok(f".env parsed, {len(env_keys)} keys")
     url_pattern = re.compile(r'http://([a-z0-9][a-z0-9\-]*):(\d+)')
     referenced_hosts = {}
-    for py_file in ROOT.rglob("*.py"):
-        if "/.git/" in str(py_file) or py_file.name == "audit_verify.py": continue
+    for py_file in project_python_files():
+        if py_file.name == "audit_verify.py": continue
         text = py_file.read_text(errors="ignore")
         for host, port in url_pattern.findall(text):
             referenced_hosts.setdefault(host, set()).add(str(py_file.relative_to(ROOT)))
@@ -153,8 +157,8 @@ def audit_section_6():
     section("SECTION 6: Env Vars Referenced vs Defined")
     env_keys = set(read_env_keys(ROOT / ".env").keys())
     referenced = {}
-    for py_file in ROOT.rglob("*.py"):
-        if "/.git/" in str(py_file) or py_file.name == "audit_verify.py": continue
+    for py_file in project_python_files():
+        if py_file.name == "audit_verify.py": continue
         for var, _ in find_getenv_calls(py_file): referenced.setdefault(var, []).append(str(py_file))
     undefined = sorted(set(referenced.keys()) - env_keys)
     acceptable = {"LOG_LEVEL", "JEV_SYSTEM_PROMPT_PATH", "DASHBOARD_FINDINGS_WINDOW_MINUTES", "HERMES_SKILLS_DIR",

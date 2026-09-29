@@ -1,0 +1,657 @@
+{
+  "run_timestamp_utc": "2026-09-29T13:34:23.080699+00:00",
+  "mode": "live",
+  "proof_contract": [
+    "SOC Core returned an event database UUID",
+    "Finding event_ids contains that exact UUID",
+    "Finding category equals expected_category",
+    "Unique marker is present in finding evidence"
+  ],
+  "counts": {
+    "PASS": 14,
+    "NOT_TESTABLE_AUTOMATICALLY": 1,
+    "PASS_MANUAL_ONLY": 2
+  },
+  "results": [
+    {
+      "category_no": 1,
+      "category_name": "Malware",
+      "expected_category": "malware",
+      "actual_category": "malware",
+      "test_marker": "01-49dac1cfcb1343ac9a6d6bb73441440d",
+      "timestamp_utc": "2026-09-29T13:34:22.531719+00:00",
+      "manual_only": false,
+      "coverage_mode": "normalized automatic path",
+      "event_stored": true,
+      "event_db_id": "12a65994-9305-489c-aa68-1e8f5ca4e8bc",
+      "finding_found": true,
+      "finding_id": "8ff2fd74-d74b-46f0-b3f8-b019462be59a",
+      "analysis_status": "pending_ai",
+      "evidence_marker_verified": true,
+      "latency_seconds": 0.022,
+      "lookup_method": "dashboard_api",
+      "result_status": "PASS",
+      "note": "Exact event UUID, expected category, and marker verified via dashboard_api",
+      "payload": {
+        "source": "wazuh",
+        "type": "malware",
+        "description": "[COVERAGE_TEST:01-49dac1cfcb1343ac9a6d6bb73441440d] Synthetic EICAR-style malware signature alert",
+        "severity": "high",
+        "mitre_technique": [
+          "T1105"
+        ],
+        "test_marker": "01-49dac1cfcb1343ac9a6d6bb73441440d",
+        "is_synthetic_test": true,
+        "raw": {
+          "rule_id": "RULE-MAL-001",
+          "artifact": "EICAR-TEST-SIGNATURE",
+          "test_marker": "01-49dac1cfcb1343ac9a6d6bb73441440d",
+          "is_synthetic_test": true,
+          "coverage_expected_category": "malware"
+        }
+      }
+    },
+    {
+      "category_no": 2,
+      "category_name": "Ransomware",
+      "expected_category": "ransomware",
+      "actual_category": "ransomware",
+      "test_marker": "02-e4a6206d99f744ffb5458540bc02d046",
+      "timestamp_utc": "2026-09-29T13:34:22.576045+00:00",
+      "manual_only": false,
+      "coverage_mode": "normalized automatic path",
+      "event_stored": true,
+      "event_db_id": "e0fba84b-3626-4eb8-8108-a63d9f9fc4ad",
+      "finding_found": true,
+      "finding_id": "d74f1e35-a63c-47aa-93fd-9c5db737e141",
+      "analysis_status": "pending_ai",
+      "evidence_marker_verified": true,
+      "latency_seconds": 0.023,
+      "lookup_method": "dashboard_api",
+      "result_status": "PASS",
+      "note": "Exact event UUID, expected category, and marker verified via dashboard_api",
+      "payload": {
+        "source": "wazuh",
+        "type": "ransomware",
+        "description": "[COVERAGE_TEST:02-e4a6206d99f744ffb5458540bc02d046] Synthetic mass file encryption and shadow-copy deletion behavior",
+        "severity": "critical",
+        "mitre_technique": [
+          "T1486",
+          "T1490"
+        ],
+        "test_marker": "02-e4a6206d99f744ffb5458540bc02d046",
+        "is_synthetic_test": true,
+        "raw": {
+          "rule_id": "RULE-RANS-001",
+          "files_renamed_count": 500,
+          "test_marker": "02-e4a6206d99f744ffb5458540bc02d046",
+          "is_synthetic_test": true,
+          "coverage_expected_category": "ransomware"
+        }
+      }
+    },
+    {
+      "category_no": 3,
+      "category_name": "Phishing",
+      "expected_category": "phishing",
+      "actual_category": "phishing",
+      "test_marker": "03-7bc91ae8a2824bc49347c0c560d06459",
+      "timestamp_utc": "2026-09-29T13:34:22.633494+00:00",
+      "manual_only": false,
+      "coverage_mode": "normalized automatic path",
+      "event_stored": true,
+      "event_db_id": "59db5617-9e45-4ba6-8115-f733a7a102f3",
+      "finding_found": true,
+      "finding_id": "2032db33-54a1-42ad-8bb2-180fbc317ebe",
+      "analysis_status": "pending_ai",
+      "evidence_marker_verified": true,
+      "latency_seconds": 0.022,
+      "lookup_method": "dashboard_api",
+      "result_status": "PASS",
+      "note": "Exact event UUID, expected category, and marker verified via dashboard_api",
+      "payload": {
+        "source": "m365_audit",
+        "type": "phishing",
+        "description": "[COVERAGE_TEST:03-7bc91ae8a2824bc49347c0c560d06459] Synthetic suspicious inbox rule forward-and-delete phishing signal",
+        "severity": "high",
+        "mitre_technique": [
+          "T1566"
+        ],
+        "test_marker": "03-7bc91ae8a2824bc49347c0c560d06459",
+        "is_synthetic_test": true,
+        "raw": {
+          "rule_id": "RULE-PHISH-001",
+          "operation": "New-InboxRule",
+          "test_marker": "03-7bc91ae8a2824bc49347c0c560d06459",
+          "is_synthetic_test": true,
+          "coverage_expected_category": "phishing"
+        }
+      }
+    },
+    {
+      "category_no": 4,
+      "category_name": "Credential Theft",
+      "expected_category": "credential_attack",
+      "actual_category": "credential_attack",
+      "test_marker": "04-92559cbc9c3341618e7a55894b7da1af",
+      "timestamp_utc": "2026-09-29T13:34:22.668820+00:00",
+      "manual_only": false,
+      "coverage_mode": "normalized automatic path",
+      "event_stored": true,
+      "event_db_id": "6fc66207-c440-45d0-a60a-f9eadbbbd726",
+      "finding_found": true,
+      "finding_id": "f035d8e6-5869-42aa-a944-6eaf53f5c89e",
+      "analysis_status": "pending_ai",
+      "evidence_marker_verified": true,
+      "latency_seconds": 0.019,
+      "lookup_method": "dashboard_api",
+      "result_status": "PASS",
+      "note": "Exact event UUID, expected category, and marker verified via dashboard_api",
+      "payload": {
+        "source": "syslog",
+        "type": "credential_attack",
+        "description": "[COVERAGE_TEST:04-92559cbc9c3341618e7a55894b7da1af] Synthetic password spray with multiple authentication failures",
+        "severity": "high",
+        "mitre_technique": [
+          "T1110"
+        ],
+        "test_marker": "04-92559cbc9c3341618e7a55894b7da1af",
+        "is_synthetic_test": true,
+        "raw": {
+          "rule_id": "RULE-CRED-001",
+          "failed_attempts": 25,
+          "test_marker": "04-92559cbc9c3341618e7a55894b7da1af",
+          "is_synthetic_test": true,
+          "coverage_expected_category": "credential_attack"
+        }
+      }
+    },
+    {
+      "category_no": 5,
+      "category_name": "Network Intrusion",
+      "expected_category": "suspicious_network",
+      "actual_category": "suspicious_network",
+      "test_marker": "05-3ec6deac30944f65bb1bc020a74003e2",
+      "timestamp_utc": "2026-09-29T13:34:22.697327+00:00",
+      "manual_only": false,
+      "coverage_mode": "normalized automatic path",
+      "event_stored": true,
+      "event_db_id": "9448b081-3bf5-497e-9d6c-6c7c50c8d535",
+      "finding_found": true,
+      "finding_id": "ae222b19-d13b-4377-8028-cb79f7de0795",
+      "analysis_status": "pending_ai",
+      "evidence_marker_verified": true,
+      "latency_seconds": 0.019,
+      "lookup_method": "dashboard_api",
+      "result_status": "PASS",
+      "note": "Exact event UUID, expected category, and marker verified via dashboard_api",
+      "payload": {
+        "source": "fortigate",
+        "type": "network_attack",
+        "description": "[COVERAGE_TEST:05-3ec6deac30944f65bb1bc020a74003e2] Synthetic Fortigate IPS signature attack dropped",
+        "severity": "high",
+        "mitre_technique": [
+          "T1190"
+        ],
+        "test_marker": "05-3ec6deac30944f65bb1bc020a74003e2",
+        "is_synthetic_test": true,
+        "raw": {
+          "rule_id": "RULE-NETI-001",
+          "signature": "Exploit.Generic.CoverageTest",
+          "test_marker": "05-3ec6deac30944f65bb1bc020a74003e2",
+          "is_synthetic_test": true,
+          "coverage_expected_category": "suspicious_network"
+        }
+      }
+    },
+    {
+      "category_no": 6,
+      "category_name": "Reconnaissance",
+      "expected_category": "reconnaissance",
+      "actual_category": "reconnaissance",
+      "test_marker": "06-d80049518b3f4968b31aab0ffc910c46",
+      "timestamp_utc": "2026-09-29T13:34:22.726358+00:00",
+      "manual_only": false,
+      "coverage_mode": "normalized automatic path",
+      "event_stored": true,
+      "event_db_id": "be39cdc0-6b8f-442c-a0a7-8817c9ef44e2",
+      "finding_found": true,
+      "finding_id": "abd51fcd-742b-4712-9268-e0c7fe17cc3f",
+      "analysis_status": "pending_ai",
+      "evidence_marker_verified": true,
+      "latency_seconds": 0.019,
+      "lookup_method": "dashboard_api",
+      "result_status": "PASS",
+      "note": "Exact event UUID, expected category, and marker verified via dashboard_api",
+      "payload": {
+        "source": "fortigate",
+        "type": "reconnaissance",
+        "description": "[COVERAGE_TEST:06-d80049518b3f4968b31aab0ffc910c46] Synthetic Nmap-like port scan detected",
+        "severity": "medium",
+        "mitre_technique": [
+          "T1595",
+          "T1046"
+        ],
+        "test_marker": "06-d80049518b3f4968b31aab0ffc910c46",
+        "is_synthetic_test": true,
+        "raw": {
+          "rule_id": "RULE-RECON-001",
+          "ports_scanned": 200,
+          "test_marker": "06-d80049518b3f4968b31aab0ffc910c46",
+          "is_synthetic_test": true,
+          "coverage_expected_category": "reconnaissance"
+        }
+      }
+    },
+    {
+      "category_no": 7,
+      "category_name": "Vulnerability",
+      "expected_category": "vulnerability_management",
+      "actual_category": "vulnerability_management",
+      "test_marker": "07-e6196c543a284e1e8e03ac5c9937b589",
+      "timestamp_utc": "2026-09-29T13:34:22.754632+00:00",
+      "manual_only": false,
+      "coverage_mode": "normalized automatic path",
+      "event_stored": true,
+      "event_db_id": "f5920149-5955-4a1e-a42c-bcd8be2cda29",
+      "finding_found": true,
+      "finding_id": "57fa3ed6-a126-4ae9-96c3-f755a75ac35f",
+      "analysis_status": "pending_ai",
+      "evidence_marker_verified": true,
+      "latency_seconds": 0.02,
+      "lookup_method": "dashboard_api",
+      "result_status": "PASS",
+      "note": "Exact event UUID, expected category, and marker verified via dashboard_api",
+      "payload": {
+        "source": "wazuh",
+        "type": "vulnerability",
+        "description": "[COVERAGE_TEST:07-e6196c543a284e1e8e03ac5c9937b589] Synthetic CVE-9999-0001 vulnerable package match",
+        "severity": "high",
+        "mitre_technique": [
+          "T1190"
+        ],
+        "test_marker": "07-e6196c543a284e1e8e03ac5c9937b589",
+        "is_synthetic_test": true,
+        "raw": {
+          "rule_id": "RULE-VULN-001",
+          "cve": "CVE-9999-0001",
+          "test_marker": "07-e6196c543a284e1e8e03ac5c9937b589",
+          "is_synthetic_test": true,
+          "coverage_expected_category": "vulnerability_management"
+        }
+      }
+    },
+    {
+      "category_no": 8,
+      "category_name": "File Integrity",
+      "expected_category": "file_integrity",
+      "actual_category": "file_integrity",
+      "test_marker": "08-bc2352a0a6c5474f8d805c24d0b935f4",
+      "timestamp_utc": "2026-09-29T13:34:22.784056+00:00",
+      "manual_only": false,
+      "coverage_mode": "normalized automatic path",
+      "event_stored": true,
+      "event_db_id": "99077ef9-0676-4a5e-8dc9-0b353d986e61",
+      "finding_found": true,
+      "finding_id": "7732cf44-d0d5-4b03-870d-b75ae3c8f8e4",
+      "analysis_status": "pending_ai",
+      "evidence_marker_verified": true,
+      "latency_seconds": 0.021,
+      "lookup_method": "dashboard_api",
+      "result_status": "PASS",
+      "note": "Exact event UUID, expected category, and marker verified via dashboard_api",
+      "payload": {
+        "source": "wazuh",
+        "type": "fim_change",
+        "description": "[COVERAGE_TEST:08-bc2352a0a6c5474f8d805c24d0b935f4] FIM: synthetic modification of /etc/coverage_test_critical_file",
+        "severity": "high",
+        "mitre_technique": [
+          "T1565"
+        ],
+        "test_marker": "08-bc2352a0a6c5474f8d805c24d0b935f4",
+        "is_synthetic_test": true,
+        "raw": {
+          "rule_id": "RULE-FIM-001",
+          "fim_path": "/etc/coverage_test_critical_file",
+          "wazuh_rule_groups": [
+            "syscheck"
+          ],
+          "test_marker": "08-bc2352a0a6c5474f8d805c24d0b935f4",
+          "is_synthetic_test": true,
+          "coverage_expected_category": "file_integrity"
+        }
+      }
+    },
+    {
+      "category_no": 9,
+      "category_name": "Supply Chain",
+      "expected_category": "supply_chain",
+      "actual_category": "supply_chain",
+      "test_marker": "09-ed1e374f5401409c9d47711b0befc400",
+      "timestamp_utc": "2026-09-29T13:34:22.814611+00:00",
+      "manual_only": false,
+      "coverage_mode": "normalized automatic path",
+      "event_stored": true,
+      "event_db_id": "887ae347-621a-4925-bb97-cb34a9c479bf",
+      "finding_found": true,
+      "finding_id": "abfc4f03-fd6a-4f83-bc35-73a73af32c9d",
+      "analysis_status": "pending_ai",
+      "evidence_marker_verified": true,
+      "latency_seconds": 0.032,
+      "lookup_method": "dashboard_api",
+      "result_status": "PASS",
+      "note": "Exact event UUID, expected category, and marker verified via dashboard_api",
+      "payload": {
+        "source": "wazuh",
+        "type": "fim_change",
+        "description": "[COVERAGE_TEST:09-ed1e374f5401409c9d47711b0befc400] FIM: synthetic dependency change in /opt/app/node_modules/coverage-test",
+        "severity": "critical",
+        "mitre_technique": [
+          "T1195.002"
+        ],
+        "test_marker": "09-ed1e374f5401409c9d47711b0befc400",
+        "is_synthetic_test": true,
+        "raw": {
+          "rule_id": "RULE-SUPPLY-001",
+          "fim_path": "/opt/app/node_modules/coverage-test",
+          "wazuh_rule_groups": [
+            "syscheck"
+          ],
+          "test_marker": "09-ed1e374f5401409c9d47711b0befc400",
+          "is_synthetic_test": true,
+          "coverage_expected_category": "supply_chain"
+        }
+      }
+    },
+    {
+      "category_no": 10,
+      "category_name": "DDoS",
+      "expected_category": "ddos",
+      "actual_category": "ddos",
+      "test_marker": "10-35357417e35c43ea9b906aaca5cc34a7",
+      "timestamp_utc": "2026-09-29T13:34:22.855971+00:00",
+      "manual_only": false,
+      "coverage_mode": "normalized automatic path",
+      "event_stored": true,
+      "event_db_id": "6bad9862-2400-4b61-b794-689d205034ac",
+      "finding_found": true,
+      "finding_id": "728a32b5-3381-4e8a-a486-9c8c3f16c8bd",
+      "analysis_status": "pending_ai",
+      "evidence_marker_verified": true,
+      "latency_seconds": 0.02,
+      "lookup_method": "dashboard_api",
+      "result_status": "PASS",
+      "note": "Exact event UUID, expected category, and marker verified via dashboard_api",
+      "payload": {
+        "source": "fortigate",
+        "type": "dos_attack",
+        "description": "[COVERAGE_TEST:10-35357417e35c43ea9b906aaca5cc34a7] Synthetic volumetric SYN flood DoS sensor signal",
+        "severity": "critical",
+        "mitre_technique": [
+          "T1498"
+        ],
+        "test_marker": "10-35357417e35c43ea9b906aaca5cc34a7",
+        "is_synthetic_test": true,
+        "raw": {
+          "rule_id": "RULE-DDOS-001",
+          "packets_per_second": 500000,
+          "test_marker": "10-35357417e35c43ea9b906aaca5cc34a7",
+          "is_synthetic_test": true,
+          "coverage_expected_category": "ddos"
+        }
+      }
+    },
+    {
+      "category_no": 11,
+      "category_name": "SQL Injection",
+      "expected_category": "sql_injection",
+      "actual_category": "sql_injection",
+      "test_marker": "11-894a420dcd6f4ba594facfd3c2249540",
+      "timestamp_utc": "2026-09-29T13:34:22.885730+00:00",
+      "manual_only": false,
+      "coverage_mode": "normalized automatic path",
+      "event_stored": true,
+      "event_db_id": "fe086466-a000-4cce-8193-9129fe36192f",
+      "finding_found": true,
+      "finding_id": "9818f5a0-8ebf-4ac3-a91f-69ab69041e27",
+      "analysis_status": "pending_ai",
+      "evidence_marker_verified": true,
+      "latency_seconds": 0.021,
+      "lookup_method": "dashboard_api",
+      "result_status": "PASS",
+      "note": "Exact event UUID, expected category, and marker verified via dashboard_api",
+      "payload": {
+        "source": "fortigate",
+        "type": "web_attack",
+        "description": "[COVERAGE_TEST:11-894a420dcd6f4ba594facfd3c2249540] Synthetic SQL injection UNION SELECT WAF signature",
+        "severity": "high",
+        "mitre_technique": [
+          "T1190"
+        ],
+        "test_marker": "11-894a420dcd6f4ba594facfd3c2249540",
+        "is_synthetic_test": true,
+        "raw": {
+          "rule_id": "RULE-SQLI-001",
+          "signature": "SQL Injection",
+          "test_marker": "11-894a420dcd6f4ba594facfd3c2249540",
+          "is_synthetic_test": true,
+          "coverage_expected_category": "sql_injection"
+        }
+      }
+    },
+    {
+      "category_no": 12,
+      "category_name": "Insider Threat",
+      "expected_category": "insider_threat",
+      "actual_category": "insider_threat",
+      "test_marker": "12-34f5835451c446fcb56b7f17e138fbbc",
+      "timestamp_utc": "2026-09-29T13:34:22.918472+00:00",
+      "manual_only": false,
+      "coverage_mode": "normalized automatic path",
+      "event_stored": true,
+      "event_db_id": "1993808e-0cea-4034-88a2-8512a9558f35",
+      "finding_found": true,
+      "finding_id": "a4472d3c-cc6b-4e48-b979-90d1c27ba6f7",
+      "analysis_status": "pending_ai",
+      "evidence_marker_verified": true,
+      "latency_seconds": 0.03,
+      "lookup_method": "dashboard_api",
+      "result_status": "PASS",
+      "note": "Exact event UUID, expected category, and marker verified via dashboard_api",
+      "payload": {
+        "source": "m365_audit",
+        "type": "insider_risk",
+        "description": "[COVERAGE_TEST:12-34f5835451c446fcb56b7f17e138fbbc] Synthetic correlated bulk download by one test account",
+        "severity": "high",
+        "mitre_technique": [
+          "T1530"
+        ],
+        "test_marker": "12-34f5835451c446fcb56b7f17e138fbbc",
+        "is_synthetic_test": true,
+        "raw": {
+          "rule_id": "RULE-INSIDER-001",
+          "files_downloaded": 800,
+          "test_marker": "12-34f5835451c446fcb56b7f17e138fbbc",
+          "is_synthetic_test": true,
+          "coverage_expected_category": "insider_threat"
+        }
+      }
+    },
+    {
+      "category_no": 13,
+      "category_name": "Data Exfiltration",
+      "expected_category": "data_exfiltration",
+      "actual_category": "data_exfiltration",
+      "test_marker": "13-47612cce7d134f91a3cb06c7ba2df9a1",
+      "timestamp_utc": "2026-09-29T13:34:22.958448+00:00",
+      "manual_only": false,
+      "coverage_mode": "normalized automatic path",
+      "event_stored": true,
+      "event_db_id": "e8f4a93a-9d74-49f2-a346-839c28800b44",
+      "finding_found": true,
+      "finding_id": "326f1ff3-8887-4263-ba42-61ba50ffa492",
+      "analysis_status": "pending_ai",
+      "evidence_marker_verified": true,
+      "latency_seconds": 0.02,
+      "lookup_method": "dashboard_api",
+      "result_status": "PASS",
+      "note": "Exact event UUID, expected category, and marker verified via dashboard_api",
+      "payload": {
+        "source": "m365_audit",
+        "type": "data_exfiltration",
+        "description": "[COVERAGE_TEST:13-47612cce7d134f91a3cb06c7ba2df9a1] Synthetic Purview DLP sensitive-data exfiltration policy match",
+        "severity": "critical",
+        "mitre_technique": [
+          "T1041",
+          "T1567"
+        ],
+        "test_marker": "13-47612cce7d134f91a3cb06c7ba2df9a1",
+        "is_synthetic_test": true,
+        "raw": {
+          "rule_id": "RULE-DLP-001",
+          "operation": "DlpRuleMatch",
+          "test_marker": "13-47612cce7d134f91a3cb06c7ba2df9a1",
+          "is_synthetic_test": true,
+          "coverage_expected_category": "data_exfiltration"
+        }
+      }
+    },
+    {
+      "category_no": 14,
+      "category_name": "APT Activity",
+      "expected_category": "apt_activity",
+      "actual_category": "apt_activity",
+      "test_marker": "14-d4485fb4486c4710832e798af1919467",
+      "timestamp_utc": "2026-09-29T13:34:22.988887+00:00",
+      "manual_only": false,
+      "coverage_mode": "normalized automatic path",
+      "event_stored": true,
+      "event_db_id": "fcd2e312-c3a7-498d-99e4-7aae580c578b",
+      "finding_found": true,
+      "finding_id": "f8bd102c-2497-4f62-9eb1-94ceae39568f",
+      "analysis_status": "pending_ai",
+      "evidence_marker_verified": true,
+      "latency_seconds": 0.022,
+      "lookup_method": "dashboard_api",
+      "result_status": "PASS",
+      "note": "Exact event UUID, expected category, and marker verified via dashboard_api",
+      "payload": {
+        "source": "threat_intel",
+        "type": "security_alert",
+        "description": "[COVERAGE_TEST:14-d4485fb4486c4710832e798af1919467] Synthetic APT29 threat actor attributed security alert",
+        "severity": "critical",
+        "mitre_technique": [
+          "T1071",
+          "T1105"
+        ],
+        "test_marker": "14-d4485fb4486c4710832e798af1919467",
+        "is_synthetic_test": true,
+        "raw": {
+          "rule_id": "RULE-APT-001",
+          "attribution": "APT29",
+          "test_marker": "14-d4485fb4486c4710832e798af1919467",
+          "is_synthetic_test": true,
+          "coverage_expected_category": "apt_activity"
+        }
+      }
+    },
+    {
+      "category_no": 15,
+      "category_name": "Zero-Day",
+      "expected_category": "zero_day",
+      "actual_category": null,
+      "test_marker": "15-53ac4c8fe32d4e12bcd39b481ff31cb2",
+      "timestamp_utc": "2026-09-29T13:34:23.021229+00:00",
+      "manual_only": false,
+      "coverage_mode": "review only",
+      "event_stored": false,
+      "event_db_id": null,
+      "finding_found": false,
+      "finding_id": null,
+      "analysis_status": null,
+      "evidence_marker_verified": false,
+      "latency_seconds": null,
+      "lookup_method": null,
+      "result_status": "NOT_TESTABLE_AUTOMATICALLY",
+      "note": "Unknown-unknown cannot be validated honestly with a known signature; perform process and anomaly-detection review.",
+      "payload": null
+    },
+    {
+      "category_no": 16,
+      "category_name": "Cloud-Native",
+      "expected_category": "cloud_native",
+      "actual_category": "cloud_native",
+      "test_marker": "16-35aab881b38844a58c36ad3973688775",
+      "timestamp_utc": "2026-09-29T13:34:23.021382+00:00",
+      "manual_only": true,
+      "coverage_mode": "manual ingest",
+      "event_stored": true,
+      "event_db_id": "ba983e66-5dbb-4a25-a264-dc2484dfb472",
+      "finding_found": true,
+      "finding_id": "55bedade-e4da-46c8-ab6e-f57164f10484",
+      "analysis_status": "pending_ai",
+      "evidence_marker_verified": true,
+      "latency_seconds": 0.021,
+      "lookup_method": "dashboard_api",
+      "result_status": "PASS_MANUAL_ONLY",
+      "note": "Exact event UUID, expected category, and marker verified via dashboard_api",
+      "payload": {
+        "source": "aws_cloudtrail",
+        "type": "cloud_alert",
+        "description": "[COVERAGE_TEST:16-35aab881b38844a58c36ad3973688775] Synthetic AWS IAM root UnauthorizedAccess cloud alert",
+        "severity": "critical",
+        "mitre_technique": [
+          "T1078.004",
+          "T1526"
+        ],
+        "test_marker": "16-35aab881b38844a58c36ad3973688775",
+        "is_synthetic_test": true,
+        "raw": {
+          "cloud_provider": "aws",
+          "test_marker": "16-35aab881b38844a58c36ad3973688775",
+          "is_synthetic_test": true,
+          "coverage_expected_category": "cloud_native"
+        }
+      }
+    },
+    {
+      "category_no": 17,
+      "category_name": "Container/Kubernetes",
+      "expected_category": "container_kubernetes",
+      "actual_category": "container_kubernetes",
+      "test_marker": "17-08e0bb31888f45c49f8276e8e4c64d94",
+      "timestamp_utc": "2026-09-29T13:34:23.052326+00:00",
+      "manual_only": true,
+      "coverage_mode": "manual ingest",
+      "event_stored": true,
+      "event_db_id": "6e7abb7b-a7bd-4b7c-9e92-bbbb7f0f8767",
+      "finding_found": true,
+      "finding_id": "6eb22cff-ddd1-482d-a342-d0e5cd5235b6",
+      "analysis_status": "pending_ai",
+      "evidence_marker_verified": true,
+      "latency_seconds": 0.019,
+      "lookup_method": "dashboard_api",
+      "result_status": "PASS_MANUAL_ONLY",
+      "note": "Exact event UUID, expected category, and marker verified via dashboard_api",
+      "payload": {
+        "source": "k8s_audit",
+        "type": "k8s_alert",
+        "description": "[COVERAGE_TEST:17-08e0bb31888f45c49f8276e8e4c64d94] Synthetic privileged container hostPath mount",
+        "severity": "high",
+        "mitre_technique": [
+          "T1610",
+          "T1613"
+        ],
+        "test_marker": "17-08e0bb31888f45c49f8276e8e4c64d94",
+        "is_synthetic_test": true,
+        "raw": {
+          "namespace": "coverage-test",
+          "privileged": true,
+          "test_marker": "17-08e0bb31888f45c49f8276e8e4c64d94",
+          "is_synthetic_test": true,
+          "coverage_expected_category": "container_kubernetes"
+        }
+      }
+    }
+  ]
+}

@@ -1,6 +1,7 @@
 from __future__ import annotations
 import logging, os, threading
 from datetime import datetime
+from uuid import UUID
 from fastapi import FastAPI, HTTPException, Query
 from . import db, memory, redis_client
 from .reporter import delivery_loop
@@ -42,6 +43,13 @@ async def findings_analytics(start: datetime | None = None, end: datetime | None
                              severity: str | None = None, category: str | None = None, q: str | None = None):
     if start and end and start > end: raise HTTPException(status_code=400, detail="start must be before end")
     return db.findings_analytics(start, end, bucket, severity, category, q)
+@app.get("/findings/by-event/{event_id}")
+async def finding_by_event(event_id: str):
+    try: canonical_id = str(UUID(event_id))
+    except ValueError: raise HTTPException(status_code=400, detail="invalid event id")
+    finding = db.get_finding_by_event_id(canonical_id)
+    if not finding: raise HTTPException(status_code=404, detail="finding not found for event")
+    return finding
 @app.get("/findings/detail/{finding_id}")
 async def finding_detail(finding_id: str):
     finding = db.get_finding(finding_id)
