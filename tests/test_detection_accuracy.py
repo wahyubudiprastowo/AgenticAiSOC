@@ -233,6 +233,10 @@ class DashboardAttackDetailTests(unittest.TestCase):
         self.assertEqual(detail["attack"]["path"]["kind"], "exposure")
         self.assertIn("server01", detail["attack"]["path"]["destination_values"])
         self.assertEqual(detail["attack"]["field_status"]["source"], "observed")
+        self.assertEqual(detail["quality"]["maturity"], "source_evidenced")
+        self.assertEqual(detail["quality"]["completeness_pct"], 100)
+        self.assertIn("Source IP", detail["quality"]["observed_fields"])
+        self.assertIn("User", detail["quality"]["not_applicable_fields"])
         self.assertEqual(detail["attack"]["indicators"][0]["ioc_type"], "cve")
         self.assertEqual(detail["mitre"][0]["name"], "Exploit Public-Facing Application")
         self.assertEqual(detail["events"][0]["raw"]["normalized"]["raw_kv"]["password"], "[REDACTED]")
@@ -256,6 +260,7 @@ class DashboardAttackDetailTests(unittest.TestCase):
         self.assertEqual(detail["attack"]["destinations"], ["analyst@example.org"])
         self.assertEqual(detail["attack"]["actions"], ["Delivered"])
         self.assertEqual(detail["events"][0]["technical"]["detection_method"], "Spoof DMARC")
+        self.assertEqual(detail["quality"]["maturity"], "source_evidenced")
 
     def test_attack_detail_separates_endpoint_asset_ip_from_source_ip(self):
         finding = {"id": "finding-fim", "category": "file_integrity", "threat_classification": "File Integrity",
@@ -271,6 +276,7 @@ class DashboardAttackDetailTests(unittest.TestCase):
         self.assertEqual(detail["attack"]["actions"], ["modified"])
         self.assertEqual(detail["attack"]["path"]["kind"], "endpoint")
         self.assertEqual(detail["attack"]["cve_status"], "not_applicable_to_event_type")
+        self.assertIn("Source IP", detail["quality"]["not_applicable_fields"])
 
     def test_attack_detail_marks_sparse_coverage_test_as_synthetic(self):
         finding = {"id": "finding-test", "category": "sql_injection", "threat_classification": "SQL Injection",
@@ -283,6 +289,9 @@ class DashboardAttackDetailTests(unittest.TestCase):
         self.assertTrue(detail["provenance"]["is_synthetic"])
         self.assertEqual(detail["provenance"]["kind"], "synthetic_validation")
         self.assertEqual(detail["attack"]["cve_status"], "not_reported_by_source")
+        self.assertEqual(detail["quality"]["maturity"], "validation_only")
+        self.assertIn("Destination asset or account", detail["quality"]["missing_fields"])
+        self.assertTrue(any("not source-sensor" in item for item in detail["quality"]["limitations"]))
 
     def test_endpoint_malware_user_does_not_turn_asset_into_mail_recipient(self):
         finding = {"id": "finding-malware", "category": "malware", "threat_classification": "Malware",
