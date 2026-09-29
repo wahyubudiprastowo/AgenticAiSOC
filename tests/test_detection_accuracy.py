@@ -230,9 +230,59 @@ class DashboardAttackDetailTests(unittest.TestCase):
         self.assertIn("server01", detail["attack"]["destinations"])
         self.assertEqual(detail["attack"]["cves"], ["CVE-2025-54293"])
         self.assertEqual(detail["attack"]["cve_status"], "observed_in_source_event")
+        self.assertEqual(detail["attack"]["path"]["kind"], "exposure")
+        self.assertIn("server01", detail["attack"]["path"]["destination_values"])
+        self.assertEqual(detail["attack"]["field_status"]["source"], "observed")
         self.assertEqual(detail["attack"]["indicators"][0]["ioc_type"], "cve")
         self.assertEqual(detail["mitre"][0]["name"], "Exploit Public-Facing Application")
         self.assertEqual(detail["events"][0]["raw"]["normalized"]["raw_kv"]["password"], "[REDACTED]")
+
+    def test_attack_detail_extracts_mail_sender_recipient_ip_and_delivery(self):
+        finding = {"id": "finding-mail", "category": "phishing", "threat_classification": "Phishing",
+                   "severity": "high", "confidence": 0.8, "evidence": {}, "ai_result": {}}
+        event = {"id": "event-mail", "source": "m365_audit", "type": "phishing", "severity": "high",
+                 "description": "ThreatIntelligence: TIMailData", "raw_payload": {"operation": "TIMailData"},
+                 "normalized": {"source": "m365_audit", "type": "phishing", "user_name": "ThreatIntel", "raw_kv": {
+                     "operation": "TIMailData", "object_id": "opaque-message-id"}, "raw": {
+                     "P1Sender": "sender@example.net", "SenderIp": "8.8.8.8",
+                     "Recipients": ["analyst@example.org"], "DeliveryAction": "Delivered",
+                     "Subject": "Invoice", "DetectionMethod": "Spoof DMARC", "DeviceName": "ThreatIntel"}}}
+        detail = dashboard_agg.attack_detail(finding, [event])
+        self.assertEqual(detail["attack"]["path"]["kind"], "email")
+        self.assertIn("sender@example.net", detail["attack"]["source_identities"])
+        self.assertIn("8.8.8.8", detail["attack"]["source_ips"])
+        self.assertEqual(detail["attack"]["affected_users"], ["analyst@example.org"])
+        self.assertEqual(detail["attack"]["users"], ["analyst@example.org"])
+        self.assertEqual(detail["attack"]["destinations"], ["analyst@example.org"])
+        self.assertEqual(detail["attack"]["actions"], ["Delivered"])
+        self.assertEqual(detail["events"][0]["technical"]["detection_method"], "Spoof DMARC")
+
+    def test_attack_detail_separates_endpoint_asset_ip_from_source_ip(self):
+        finding = {"id": "finding-fim", "category": "file_integrity", "threat_classification": "File Integrity",
+                   "severity": "medium", "confidence": 0.7, "evidence": {}, "ai_result": {}}
+        event = {"id": "event-fim", "source": "wazuh", "type": "fim_change", "severity": "medium",
+                 "description": "FIM: modified on /etc/ssh/sshd_config", "normalized": {
+                     "source": "wazuh", "type": "fim_change", "destination": "server01",
+                     "raw": {"agent": {"name": "server01", "ip": "10.20.30.40"}},
+                     "raw_kv": {"fim_event": "modified", "fim_path": "/etc/ssh/sshd_config"}}}
+        detail = dashboard_agg.attack_detail(finding, [event])
+        self.assertEqual(detail["attack"]["source_ips"], [])
+        self.assertEqual(detail["attack"]["destination_ips"], ["10.20.30.40"])
+        self.assertEqual(detail["attack"]["actions"], ["modified"])
+        self.assertEqual(detail["attack"]["path"]["kind"], "endpoint")
+        self.assertEqual(detail["attack"]["cve_status"], "not_applicable_to_event_type")
+
+    def test_attack_detail_marks_sparse_coverage_test_as_synthetic(self):
+        finding = {"id": "finding-test", "category": "sql_injection", "threat_classification": "SQL Injection",
+                   "severity": "high", "confidence": 0.8, "evidence": {}, "ai_result": {}}
+        event = {"id": "event-test", "source": "fortigate", "type": "web_attack", "severity": "high",
+                 "description": "[COVERAGE_TEST:11-abc] Synthetic SQL injection", "normalized": {
+                     "source": "fortigate", "type": "web_attack", "is_synthetic_test": True,
+                     "raw_kv": {"is_synthetic_test": True}}}
+        detail = dashboard_agg.attack_detail(finding, [event])
+        self.assertTrue(detail["provenance"]["is_synthetic"])
+        self.assertEqual(detail["provenance"]["kind"], "synthetic_validation")
+        self.assertEqual(detail["attack"]["cve_status"], "not_reported_by_source")
 
 
 class QdrantMemoryTests(unittest.TestCase):

@@ -135,10 +135,15 @@ async def api_settings() -> dict:
         "threat_intel": {"providers": intel_providers, "feeds": feed_stats},
         "source_of_truth": ".env", "editable": False,
         "generated_at": datetime.now(timezone.utc).isoformat()}
-async def _safe_get(client: httpx.AsyncClient, url: str, default: Any) -> Any:
-    try:
-        resp = await client.get(url, timeout=DASHBOARD_UPSTREAM_TIMEOUT_SECONDS); resp.raise_for_status(); return resp.json()
-    except Exception: return default
+async def _safe_get(client: httpx.AsyncClient, url: str, default: Any,
+                    timeout: float | None = None, attempts: int = 1) -> Any:
+    request_timeout = timeout or DASHBOARD_UPSTREAM_TIMEOUT_SECONDS
+    for attempt in range(max(1, attempts)):
+        try:
+            resp = await client.get(url, timeout=request_timeout); resp.raise_for_status(); return resp.json()
+        except Exception:
+            if attempt + 1 < attempts: await asyncio.sleep(0.12)
+    return default
 async def _gather_raw_data() -> dict:
     async with httpx.AsyncClient() as client:
         (soc_stats, events_resp, timeline_resp, findings_resp, findings_window_resp, m365_stats, intel_providers,
@@ -248,21 +253,28 @@ async def api_finding_by_event(event_id: str) -> dict:
 async def api_finding_detail(finding_id: str) -> dict:
     try: canonical_id = str(UUID(finding_id))
     except ValueError: raise HTTPException(status_code=400, detail="invalid finding id")
+    detail_timeout = max(DASHBOARD_UPSTREAM_TIMEOUT_SECONDS, 10.0)
     async with httpx.AsyncClient() as client:
-        try:
-            response = await client.get(f"{SOC_CORE_URL}/findings/detail/{canonical_id}", timeout=DASHBOARD_UPSTREAM_TIMEOUT_SECONDS)
-            if response.status_code == 404: raise HTTPException(status_code=404, detail="finding not found")
-            response.raise_for_status(); finding = response.json()
-        except HTTPException: raise
-        except Exception as exc:
-            logger.warning("Finding detail unavailable for %s: %s", canonical_id, exc)
+        finding = None; last_error = None
+        for attempt in range(2):
+            try:
+                response = await client.get(f"{SOC_CORE_URL}/findings/detail/{canonical_id}", timeout=detail_timeout)
+                if response.status_code == 404: raise HTTPException(status_code=404, detail="finding not found")
+                response.raise_for_status(); finding = response.json(); break
+            except HTTPException: raise
+            except Exception as exc:
+                last_error = exc
+                if attempt == 0: await asyncio.sleep(0.12)
+        if finding is None:
+            logger.warning("Finding detail unavailable for %s after retry: %s", canonical_id, last_error)
             raise HTTPException(status_code=502, detail="finding service unavailable")
         event_ids_raw = finding.get("event_ids") or []
         if isinstance(event_ids_raw, str):
             event_ids_raw = [item.strip().strip('"') for item in event_ids_raw.strip("{}").split(",") if item.strip()]
         event_ids = [str(event_id) for event_id in event_ids_raw][:20]
         event_responses = await asyncio.gather(*[
-            _safe_get(client, f"{SOC_CORE_URL}/events/{event_id}", None) for event_id in event_ids
+            _safe_get(client, f"{SOC_CORE_URL}/events/{event_id}", None,
+                      timeout=detail_timeout, attempts=2) for event_id in event_ids
         ])
     events = [event for event in event_responses if isinstance(event, dict)]
     detail = agg.attack_detail(finding, events)

@@ -1,5 +1,5 @@
 from __future__ import annotations
-import json, os, re
+import ipaddress, json, os, re
 from collections import Counter
 from datetime import datetime, timezone
 MITRE_NAMES = {
@@ -53,16 +53,16 @@ def _redact(value):
 
 def _unique(values) -> list[str]:
     seen, result = set(), []
-    for value in values:
+    pending = list(values)
+    while pending:
+        value = pending.pop(0)
         if value is None: continue
         if isinstance(value, (list, tuple, set)):
-            candidates = value
-        else:
-            candidates = [value]
-        for candidate in candidates:
-            text = str(candidate).strip()
-            if text and text.lower() not in {"none", "null", "unknown", "n/a"} and text not in seen:
-                seen.add(text); result.append(text)
+            pending[0:0] = list(value); continue
+        if isinstance(value, dict): continue
+        text = str(value).strip()
+        if text and text.lower() not in {"none", "null", "unknown", "n/a", "-"} and text not in seen:
+            seen.add(text); result.append(text)
     return result
 
 def _deep_values(value, wanted_keys: set[str]) -> list:
@@ -75,10 +75,24 @@ def _deep_values(value, wanted_keys: set[str]) -> list:
         for nested in value: found.extend(_deep_values(nested, wanted_keys))
     return found
 
+def _first_deep(combined: dict, keys: set[str]):
+    values = _unique(_deep_values(combined, keys))
+    if not values: return None
+    return values[0] if len(values) == 1 else values
+
+def _is_ip(value) -> bool:
+    try:
+        ipaddress.ip_address(str(value).strip())
+        return True
+    except (TypeError, ValueError):
+        return False
+
 def attack_detail(finding: dict, events: list[dict]) -> dict:
     """Build a stable analyst-facing view from a Hermes finding and its source events."""
     evidence = _json_object(finding.get("evidence")); ai_result = _json_object(finding.get("ai_result"))
-    event_details, source_ips, destinations, users, cves, sources, event_types, actions = [], [], [], [], [], [], [], []
+    event_details, source_ips, source_identities, destinations, destination_ips = [], [], [], [], []
+    actors, affected_users, synthetic_events = [], [], []
+    cves, sources, event_types, actions = [], [], [], []
     indicators = finding.get("indicators") or evidence.get("indicators") or []
     normalized_indicators = []
     for indicator in indicators:
@@ -99,17 +113,48 @@ def attack_detail(finding: dict, events: list[dict]) -> dict:
         raw_kv = _json_object(normalized.get("raw_kv")) or raw_payload
         raw_event = _json_object(normalized.get("raw"))
         combined = {"event": event, "normalized": normalized, "raw_payload": raw_payload, "raw_event": raw_event}
-        src = _unique([event.get("src_ip"), normalized.get("src_ip"),
-                       _deep_values(combined, {"srcip", "src_ip", "sourceip", "source_ip", "clientip", "actoripaddress", "ipaddress"})])
-        dst = _unique([event.get("dst_ip"), normalized.get("destination"), normalized.get("dst_ip"),
-                       raw_kv.get("object_id"), _deep_values(combined, {"dstip", "dst_ip", "destinationip", "destination_ip", "hostname", "devicename", "computer", "agent_name"})])
-        event_users = _unique([event.get("user_name"), normalized.get("user_name"), raw_kv.get("user_id"),
-                               _deep_values(combined, {"userid", "user_id", "username", "user_name", "userprincipalname"})])
-        raw_text = json.dumps(combined, default=str)
-        event_cves = _unique(cve_pattern.findall(raw_text) + _deep_values(combined, {"cve", "vulnerability_id"}))
         source = str(event.get("source") or normalized.get("source") or "unknown")
         event_type = str(event.get("type") or normalized.get("type") or "unknown")
-        action = normalized.get("action") or raw_kv.get("action") or next(iter(_deep_values(combined, {"action"})), None)
+        agent = _json_object(raw_event.get("agent"))
+        asset_ips = _unique([event.get("dst_ip"), normalized.get("dst_ip"), normalized.get("destination_ip"),
+                             agent.get("ip"),
+                             _deep_values(combined, {"dstip", "dst_ip", "destinationip", "destination_ip"})])
+        src = _unique([event.get("src_ip"), normalized.get("src_ip"),
+                       _deep_values(combined, {"srcip", "src_ip", "sourceip", "source_ip", "clientip", "client_ip",
+                                                       "actoripaddress", "ipaddress", "senderip", "originatingip"})])
+        src = [value for value in src if value not in asset_ips]
+        identities = _unique(_deep_values(combined, {"p1sender", "p2sender", "sender", "senderaddress",
+                                                      "from", "sourceusername", "actorupn", "actor_user"}))
+        event_actors = _unique([event.get("user_name"), normalized.get("user_name"), raw_kv.get("user_id"),
+                                _deep_values(combined, {"userid", "user_id", "username", "user_name", "userprincipalname"})])
+        affected = _unique(_deep_values(combined, {"targetusername", "target_user_name", "targetuser",
+                                                    "recipient", "recipients", "recipientaddress", "mailboxownerupn",
+                                                    "affecteduser", "affected_user"}))
+        if event_type in {"phishing", "malware", "mailbox_rule_change"}:
+            if not affected:
+                affected = _unique([event.get("user_name"), normalized.get("user_name")])
+        elif event_type in {"oauth_consent", "data_exfiltration", "insider_risk", "file_download", "privilege_change"}:
+            affected = _unique([affected, event.get("user_name"), normalized.get("user_name")])
+        dst = _unique([normalized.get("destination"), raw_kv.get("object_id"), agent.get("name"),
+                       _deep_values(combined, {"hostname", "devicename", "computer", "agent_name"})])
+        asset_ips = _unique([asset_ips, [value for value in dst if _is_ip(value)]])
+        dst = [value for value in dst if not _is_ip(value)]
+        if affected and event_type in {"phishing", "malware", "mailbox_rule_change", "oauth_consent", "data_exfiltration"}:
+            # For message/account activity, the affected account is the destination.
+            # Fields such as DeviceName="ThreatIntel" describe the M365 workload,
+            # not a destination host.
+            dst = list(affected)
+        raw_text = json.dumps(combined, default=str)
+        event_cves = _unique(cve_pattern.findall(raw_text) + _deep_values(combined, {"cve", "vulnerability_id"}))
+        event_actions = _unique([normalized.get("action"), raw_kv.get("action"),
+                                 _deep_values(combined, {"action", "deliveryaction", "eventaction"})])
+        if not event_actions:
+            event_actions = _unique([raw_kv.get("fim_event"), raw_kv.get("operation"),
+                                     _deep_values(combined, {"outcome", "resultstatus", "severityvalue"})])
+        action = event_actions[0] if event_actions else None
+        description = event.get("description") or normalized.get("description") or ""
+        is_synthetic = bool(normalized.get("is_synthetic_test") or raw_kv.get("is_synthetic_test")
+                            or raw_payload.get("is_synthetic_test") or "[COVERAGE_TEST" in str(description))
         technical = {
             "wazuh_rule_id": raw_kv.get("wazuh_rule_id"), "wazuh_rule_level": raw_kv.get("wazuh_rule_level"),
             "wazuh_rule_groups": raw_kv.get("wazuh_rule_groups") or [], "operation": raw_kv.get("operation"),
@@ -119,31 +164,108 @@ def attack_detail(finding: dict, events: list[dict]) -> dict:
             "cve": raw_kv.get("cve"), "cvss_score": raw_kv.get("cvss_score"),
             "is_unfixed": raw_kv.get("is_unfixed"), "is_zero_day": raw_kv.get("is_zero_day"),
             "under_evaluation": raw_kv.get("under_evaluation"), "correlation_count": raw_kv.get("correlation_count"),
+            "subject": _first_deep(combined, {"subject"}), "sender": _first_deep(combined, {"p1sender", "p2sender", "sender"}),
+            "recipients": affected if event_type in {"phishing", "malware", "mailbox_rule_change"} else None,
+            "sender_ip": _first_deep(combined, {"senderip", "originatingip"}),
+            "delivery_action": _first_deep(combined, {"deliveryaction"}),
+            "delivery_location": _first_deep(combined, {"latestdeliverylocation"}),
+            "detection_method": _first_deep(combined, {"detectionmethod"}),
+            "event_id": _first_deep(combined, {"eventid"}), "target_user": _first_deep(combined, {"targetusername"}),
+            "source_port": _first_deep(combined, {"srcport", "sourceport", "ipport"}),
+            "logon_type": _first_deep(combined, {"logontype"}), "failure_reason": _first_deep(combined, {"failurereason"}),
+            "status_code": _first_deep(combined, {"status"}), "sub_status": _first_deep(combined, {"substatus"}),
+            "process_name": _first_deep(combined, {"processname"}),
+            "affected_asset_ip": asset_ips, "fim_path": raw_kv.get("fim_path"), "fim_event": raw_kv.get("fim_event"),
         }
         event_details.append({
             "id": str(event.get("id") or ""), "external_id": event.get("external_id"), "source": source,
             "type": event_type, "severity": event.get("severity") or normalized.get("severity") or "low",
-            "timestamp": event.get("created_at") or normalized.get("time"), "description": event.get("description") or normalized.get("description"),
-            "source_ips": src, "destinations": dst, "users": event_users, "cves": event_cves,
+            "timestamp": event.get("created_at") or normalized.get("time"), "description": description,
+            "source_ips": src, "source_identities": identities, "destinations": dst, "destination_ips": asset_ips,
+            "actors": event_actors, "affected_users": affected, "users": _unique([affected, event_actors]), "cves": event_cves,
+            "is_synthetic_test": is_synthetic,
             "action": action, "mitre_techniques": _unique([event.get("mitre_technique") or [], normalized.get("mitre_technique") or []]),
             "technical": {k: v for k, v in technical.items() if v not in (None, "", [])},
             "raw": _redact({"raw_payload": raw_payload, "normalized": normalized}),
         })
-        source_ips.extend(src); destinations.extend(dst); users.extend(event_users); cves.extend(event_cves)
-        sources.append(source); event_types.append(event_type); actions.append(action)
+        source_ips.extend(src); source_identities.extend(identities); destinations.extend(dst); destination_ips.extend(asset_ips)
+        actors.extend(event_actors); affected_users.extend(affected); cves.extend(event_cves)
+        sources.append(source); event_types.append(event_type); actions.extend(event_actions); synthetic_events.append(is_synthetic)
     mitre_ids = _unique([finding.get("mitre_technique") or [], *[e.get("mitre_techniques", []) for e in event_details]])
     unique_cves = _unique(cves)
+    category = finding.get("category") or "unknown"
+    cve_relevant_categories = {"vulnerability_management", "zero_day", "malware", "suspicious_network",
+                               "sql_injection", "apt_activity"}
     cve_status = ("observed_in_source_event" if unique_cves else
-                  "missing_from_vulnerability_source" if finding.get("category") in {"vulnerability_management", "zero_day"}
-                  else "not_reported_or_not_applicable")
+                  "missing_from_vulnerability_source" if category in {"vulnerability_management", "zero_day"} else
+                  "not_reported_by_source" if category in cve_relevant_categories else
+                  "not_applicable_to_event_type")
+    unique_sources = _unique(sources); unique_src = _unique(source_ips); unique_identities = _unique(source_identities)
+    unique_dst = _unique(destinations); unique_dst_ips = _unique(destination_ips)
+    unique_affected = _unique(affected_users); unique_actors = _unique(actors)
+    unique_users = unique_affected or unique_actors
+    email_context = bool(unique_affected and (unique_identities or any(t in {"phishing", "malware"} for t in event_types)))
+    if category in {"vulnerability_management", "zero_day"}:
+        path = {"kind": "exposure", "kind_label": "Vulnerability exposure", "title": "Attack path", "status": "contextual",
+                "origin_label": "Detection source", "origin_values": unique_sources,
+                "origin_context": "Vulnerability inventory evidence; an attacker source IP is not expected in this record.",
+                "destination_label": "Affected asset", "destination_values": unique_dst,
+                "destination_context": "Asset reported by the vulnerability source." if (unique_dst or unique_dst_ips) else "Affected asset was not provided by the source."}
+    elif email_context:
+        origin_values = _unique([unique_identities, unique_src])
+        path = {"kind": "email", "kind_label": "Email/message flow", "title": "Attack path", "status": "complete" if origin_values and unique_affected else "partial",
+                "origin_label": "Sender / source", "origin_values": origin_values,
+                "origin_context": "Sender identities and source IP observed in the message evidence.",
+                "destination_label": "Recipient / affected account", "destination_values": unique_affected,
+                "destination_context": "Recipient accounts observed in the source event."}
+    elif category in {"file_integrity", "supply_chain"} or "fim_change" in event_types:
+        path = {"kind": "endpoint", "kind_label": "Endpoint integrity context", "title": "Attack path", "status": "contextual",
+                "origin_label": "Endpoint telemetry", "origin_values": unique_sources,
+                "origin_context": "This record reports a local file or registry change; a remote source IP may not exist.",
+                "destination_label": "Affected asset", "destination_values": unique_dst,
+                "destination_context": "Endpoint and object reported by the integrity sensor." if (unique_dst or unique_dst_ips) else "Affected asset was not provided by the source."}
+    else:
+        origin_values = _unique([unique_src, unique_identities])
+        path = {"kind": "attack", "kind_label": "Network/account activity", "title": "Attack path", "status": "complete" if origin_values and (unique_dst or unique_dst_ips) else "partial",
+                "origin_label": "Observed origin", "origin_values": origin_values,
+                "origin_context": "Source IP or identity recorded by the sensor." if origin_values else "The source event did not report an attacker IP or identity.",
+                "destination_label": "Destination / affected asset", "destination_values": unique_dst,
+                "destination_context": "Target asset recorded by the sensor." if (unique_dst or unique_dst_ips) else "The source event did not report a target asset."}
+    path.update({"source_ip_values": unique_src, "source_identity_values": unique_identities,
+                 "destination_asset_values": unique_affected if path["kind"] == "email" else unique_dst,
+                 "destination_ip_values": unique_dst_ips})
+    field_status = {
+        "source": "observed" if (unique_src or unique_identities) else "not_applicable" if path["kind"] in {"exposure", "endpoint"} else "not_reported",
+        "action": "observed" if _unique(actions) else "not_applicable" if path["kind"] == "exposure" else "not_reported",
+        "affected_user": "observed" if unique_affected else "not_applicable" if path["kind"] == "exposure" else "not_reported",
+        "user": "observed" if unique_users else "not_applicable" if path["kind"] == "exposure" else "not_reported",
+        "cve": cve_status,
+    }
+    cve_explanation = ("CVE identifier observed directly in the linked source event." if unique_cves else
+                       "The vulnerability source did not provide a CVE identifier." if cve_status == "missing_from_vulnerability_source" else
+                       "The source did not report a CVE for this attack." if cve_status == "not_reported_by_source" else
+                       "A CVE is not applicable to this event type unless the source explicitly reports one.")
+    is_synthetic = any(synthetic_events)
+    if is_synthetic and unique_cves:
+        cve_explanation += " This value came from a synthetic coverage-validation event and is not production vulnerability evidence."
+    provenance = {"kind": "synthetic_validation" if is_synthetic else "production_telemetry",
+                  "label": "Synthetic coverage validation" if is_synthetic else "Production telemetry",
+                  "is_synthetic": is_synthetic,
+                  "explanation": ("This finding was created by a coverage test. Blank attack-path fields reflect the test payload, not missing production telemetry."
+                                  if is_synthetic else "This finding is linked to collected source telemetry.")}
     return {
         "finding": {"id": str(finding.get("id") or ""), "classification": finding.get("threat_classification") or "Unknown",
                     "category": finding.get("category") or "unknown", "severity": finding.get("severity") or "low",
                     "confidence": float(finding.get("confidence") or 0), "status": finding.get("status") or "open",
-                    "created_time": finding.get("created_time"), "recommendation": finding.get("recommendation") or ""},
-        "attack": {"sources": _unique(sources), "source_ips": _unique(source_ips), "destinations": _unique(destinations),
-                   "users": _unique(users), "event_types": _unique(event_types), "actions": _unique(actions),
-                   "cves": unique_cves, "cve_status": cve_status, "indicators": normalized_indicators},
+                    "created_time": finding.get("created_time"), "recommendation": finding.get("recommendation") or "",
+                    "analysis_status": finding.get("analysis_status"), "detection_rule": finding.get("detection_rule"),
+                    "detection_source": finding.get("detection_source"), "updated_time": finding.get("updated_time")},
+        "attack": {"sources": unique_sources, "source_ips": unique_src, "source_identities": unique_identities,
+                   "destinations": unique_dst, "destination_ips": unique_dst_ips, "actors": unique_actors, "affected_users": unique_affected,
+                   "users": unique_users, "event_types": _unique(event_types), "actions": _unique(actions),
+                   "cves": unique_cves, "cve_status": cve_status, "cve_explanation": cve_explanation,
+                   "field_status": field_status, "path": path, "indicators": normalized_indicators},
+        "provenance": provenance,
         "mitre": [{"id": technique, "name": MITRE_NAMES.get(technique, technique)} for technique in mitre_ids],
         "evidence": evidence.get("evidence", []) if isinstance(evidence.get("evidence", []), list) else [],
         "evidence_summary": evidence.get("finding"), "ai_result": _redact(ai_result), "events": event_details,
