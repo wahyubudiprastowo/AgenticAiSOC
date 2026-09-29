@@ -1,0 +1,13 @@
+skill: insider_threat
+category: insider_threat
+description: Detects potential insider-threat indicators via M365 audit operations.
+match:
+  event_types: [insider_risk, external_sharing]
+  type_only: true
+  operations: [AnonymousLinkCreated]
+  keywords: ["correlated bulk download", "mass download", "anonymouslinkcreated", "impossible file access pattern"]
+priority: 10
+mitre_technique: ["T1078", "T1005"]
+investigation_steps:
+  - "Determine the volume and sensitivity of data accessed/downloaded/shared"
+severity_hint: high

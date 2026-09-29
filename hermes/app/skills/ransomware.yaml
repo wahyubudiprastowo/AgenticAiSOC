@@ -1,0 +1,15 @@
+skill: ransomware
+category: ransomware
+description: Detects behavioural indicators of ransomware activity.
+match:
+  event_types: [ransomware]
+  type_only: true
+  mitre_techniques: [T1486, T1490]
+  defender_categories: [Ransomware]
+  keywords: ["ransomware", "shadow copy", "vssadmin delete", "mass file rename", "encrypt"]
+priority: 20
+mitre_technique: ["T1486", "T1490"]
+investigation_steps:
+  - "Isolate the affected host from the network immediately (recommend only)"
+  - "Identify the parent process and initial access vector"
+severity_hint: critical

@@ -1,0 +1,15 @@
+skill: m365_identity_compromise
+category: credential_attack
+description: Detects identity privilege changes and OAuth/service-principal persistence in M365.
+match:
+  event_types: [privilege_change, oauth_consent]
+  type_only: true
+  operations: [MemberAdded, Add member to role, Add app role assignment to service principal]
+  keywords: ["risky user", "impossible travel", "unfamiliar sign-in", "service principal credential"]
+  defender_categories: [CredentialAccess, Persistence, PrivilegeEscalation]
+priority: 15
+mitre_technique: ["T1078", "T1098"]
+investigation_steps:
+  - "Validate the actor, target role/service principal, source IP, and approval context"
+  - "Revoke sessions and credentials if the change is unauthorized"
+severity_hint: high

@@ -1,0 +1,13 @@
+skill: ddos
+category: ddos
+description: Detects DoS/DDoS volumetric attacks via Fortigate UTM DoS sensor logs.
+match:
+  event_types: [dos_attack]
+  type_only: true
+  mitre_techniques: [T1498, T1499]
+  keywords: ["ddos", "denial of service", "denial-of-service", "syn flood", "udp flood", "icmp flood", "http flood", "volumetric"]
+priority: 10
+mitre_technique: ["T1498", "T1499"]
+investigation_steps:
+  - "Identify the targeted service/host and confirm current availability impact"
+severity_hint: high

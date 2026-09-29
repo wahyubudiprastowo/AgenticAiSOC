@@ -1,0 +1,12 @@
+skill: container_kubernetes
+category: container_kubernetes
+description: Phase 2 / manual-ingest only, same status as cloud_native.
+match:
+  event_types: [k8s_alert]
+  type_only: true
+  keywords: ["kubectl", "kube-apiserver", "pod", "container escape", "privileged container", "hostpath", "clusterrolebinding", "serviceaccount token", "falco", "admission controller"]
+priority: 10
+mitre_technique: ["T1610", "T1613"]
+investigation_steps:
+  - "Identify the specific pod, namespace, and service account involved"
+severity_hint: high

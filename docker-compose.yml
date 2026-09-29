@@ -1,0 +1,205 @@
+version: "3.9"
+
+# =====================================================================
+# Agentic AI SOC Platform — UNIQUE PORT SCHEME (v4)
+# Every HOST port shifted +30000 to avoid collision with existing
+# wazuh-manager(514/1514/1515/55000), wazuh-indexer(9200),
+# wazuh-dashboard(443), wazuh-main-server(3000), wazuh-mcp-dashboard(8088),
+# wazuh-infokom-mcp(8000), 9router(20129). INTERNAL container ports
+# (18200,8003,8005,8006,6333,8080,5432,6379,38001) are UNCHANGED -
+# container-to-container calls use Docker DNS, independent of host ports.
+# =====================================================================
+
+networks:
+  agentic-soc-net:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.31.90.0/24
+  wazuh-shared-net:
+    name: ${WAZUH_DOCKER_NETWORK:-single-node_default}
+    external: true
+
+volumes:
+  postgres_data:
+  redis_data:
+  qdrant_data:
+
+services:
+
+  syslog-collector:
+    build: ./syslog-collector
+    container_name: agentic-soc-syslog-collector
+    env_file: .env
+    ports:
+      - "${SYSLOG_UDP_PORT:-36514}:${SYSLOG_UDP_PORT:-36514}/udp"
+      - "${SYSLOG_TCP_PORT:-36514}:${SYSLOG_TCP_PORT:-36514}/tcp"
+      - "${SYSLOG_API_PORT:-38001}:${SYSLOG_API_PORT:-38001}"
+    depends_on:
+      redis:
+        condition: service_healthy
+    networks:
+      - agentic-soc-net
+    restart: unless-stopped
+
+  soc-core:
+    build: ./soc-core
+    container_name: agentic-soc-core
+    env_file: .env
+    ports:
+      - "${SOC_CORE_HOST_PORT:-48200}:18200"
+    depends_on:
+      redis:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+      threat-intel:
+        condition: service_healthy
+    networks:
+      - agentic-soc-net
+      - wazuh-shared-net
+    restart: unless-stopped
+
+  m365-collector:
+    build: ./m365-collector
+    container_name: agentic-soc-m365-collector
+    env_file: .env
+    ports:
+      - "${M365_COLLECTOR_HOST_PORT:-38006}:8006"
+    depends_on:
+      redis:
+        condition: service_healthy
+    networks:
+      - agentic-soc-net
+    restart: unless-stopped
+
+  hermes:
+    build: ./hermes
+    container_name: agentic-soc-hermes
+    env_file: .env
+    ports:
+      - "${HERMES_HOST_PORT:-38003}:8003"
+    depends_on:
+      redis:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+      jev:
+        condition: service_healthy
+      threat-intel:
+        condition: service_healthy
+      qdrant:
+        condition: service_healthy
+    networks:
+      - agentic-soc-net
+    restart: unless-stopped
+
+  jev:
+    build: ./jev-client
+    container_name: agentic-soc-jev
+    env_file: .env
+    expose:
+      - "20128"
+    networks:
+      - agentic-soc-net
+    restart: unless-stopped
+
+  threat-intel:
+    build: ./threat-intel
+    container_name: agentic-soc-threat-intel
+    env_file: .env
+    ports:
+      - "${THREAT_INTEL_HOST_PORT:-38005}:8005"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - agentic-soc-net
+    restart: unless-stopped
+
+  qdrant:
+    image: qdrant/qdrant:v1.11.4
+    container_name: agentic-soc-qdrant
+    ulimits:
+      nofile:
+        soft: 65536
+        hard: 65536
+    volumes:
+      - qdrant_data:/qdrant/storage
+    ports:
+      - "${QDRANT_HOST_PORT:-36333}:6333"
+    healthcheck:
+      test: ["CMD-SHELL", "bash -c 'cat < /dev/null > /dev/tcp/127.0.0.1/6333' || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+    networks:
+      - agentic-soc-net
+    restart: unless-stopped
+
+  dashboard:
+    build: ./dashboard
+    container_name: agentic-soc-dashboard
+    env_file: .env
+    environment:
+      - SOC_CORE_URL=http://soc-core:18200
+      - HERMES_URL=http://hermes:8003
+      - M365_COLLECTOR_URL=http://m365-collector:8006
+      - THREAT_INTEL_URL=http://threat-intel:8005
+      - SYSLOG_COLLECTOR_URL=http://syslog-collector:38001
+      - JEV_URL=http://jev:20128
+      - QDRANT_URL=http://qdrant:6333
+    ports:
+      - "${DASHBOARD_HOST_PORT:-38080}:8080"
+    depends_on:
+      soc-core:
+        condition: service_healthy
+      hermes:
+        condition: service_healthy
+    networks:
+      - agentic-soc-net
+    restart: unless-stopped
+
+  postgres:
+    image: postgres:16-alpine
+    container_name: agentic-soc-postgres
+    env_file: .env
+    environment:
+      - POSTGRES_DB=${POSTGRES_DB}
+      - POSTGRES_USER=${POSTGRES_USER}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./database/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    ports:
+      - "${POSTGRES_HOST_PORT:-35432}:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+    networks:
+      - agentic-soc-net
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    container_name: agentic-soc-redis
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - redis_data:/data
+    ports:
+      - "${REDIS_HOST_PORT:-36379}:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 5s
+    networks:
+      - agentic-soc-net
+    restart: unless-stopped

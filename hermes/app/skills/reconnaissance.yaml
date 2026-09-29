@@ -1,0 +1,13 @@
+skill: reconnaissance
+category: reconnaissance
+description: Detects port-scan / network reconnaissance activity.
+match:
+  event_types: [reconnaissance]
+  type_only: true
+  mitre_techniques: [T1046, T1595]
+  defender_categories: [Discovery]
+  keywords: ["port scan", "scan detected", "network scan", "nmap", "port sweep"]
+mitre_technique: ["T1595", "T1046"]
+investigation_steps:
+  - "Identify the scanned port range and whether it targeted a single host or a subnet"
+severity_hint: medium

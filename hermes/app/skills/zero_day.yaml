@@ -1,0 +1,12 @@
+skill: zero_day
+category: zero_day
+description: Detects zero-day/unpatched vulnerabilities via Wazuh condition=Package unfixed and CYFIRMA zero-day flags.
+match:
+  event_types: [zero_day]
+  type_only: true
+  keywords: ["zero-day", "zero day", "0-day", "0day", "actively exploited", "in the wild", "vendor fix unavailable", "no vendor fix available", "is_zero_day true"]
+priority: 40
+mitre_technique: ["T1190", "T1203"]
+investigation_steps:
+  - "Confirm there is genuinely no vendor patch available"
+severity_hint: critical

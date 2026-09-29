@@ -1,0 +1,12 @@
+skill: cloud_native
+category: cloud_native
+description: Phase 2 / manual-ingest only. No automated Azure/AWS collector exists yet.
+match:
+  event_types: [cloud_alert]
+  type_only: true
+  keywords: ["cloudtrail", "azure activity log", "s3 bucket", "iam role", "security group", "unauthorizedaccess", "root account", "azure ad", "resource manager", "public exposure"]
+priority: 10
+mitre_technique: ["T1526", "T1580"]
+investigation_steps:
+  - "Identify the specific cloud resource, IAM principal, and API action involved"
+severity_hint: high

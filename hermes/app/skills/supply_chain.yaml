@@ -1,0 +1,11 @@
+skill: supply_chain
+category: supply_chain
+description: Detects supply-chain compromise via Wazuh FIM changes to package-manager directories.
+match:
+  event_types: [fim_change]
+  keywords: ["node_modules", "site-packages", "package-lock", "requirements.txt", "vendor/", "gemfile.lock", ".nuget", "composer.lock", "yarn.lock"]
+priority: 30
+mitre_technique: ["T1195", "T1195.002"]
+investigation_steps:
+  - "Identify the exact dependency/package that changed"
+severity_hint: critical

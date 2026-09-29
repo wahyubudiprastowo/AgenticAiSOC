@@ -1,0 +1,13 @@
+skill: file_integrity
+category: file_integrity
+description: Wazuh FIM (syscheck) events - generic file integrity changes.
+match:
+  event_types: [fim_change]
+  type_only: true
+  wazuh_groups: [syscheck]
+  keywords: ["fim:"]
+  exclude_keywords: ["node_modules", "site-packages", "package-lock", "requirements.txt", "vendor/", "gemfile.lock", ".nuget", "composer.lock", "yarn.lock"]
+mitre_technique: []
+investigation_steps:
+  - "Identify which file changed and what kind of change occurred"
+severity_hint: medium

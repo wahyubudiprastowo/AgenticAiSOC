@@ -1,0 +1,48 @@
+CREATE EXTENSION IF NOT EXISTS "pgcrypto";
+CREATE TABLE IF NOT EXISTS events (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(), external_id TEXT, source TEXT NOT NULL,
+    type TEXT, severity TEXT NOT NULL DEFAULT 'low', src_ip INET, dst_ip INET,
+    user_name TEXT, description TEXT, mitre_technique TEXT[], raw_hash TEXT NOT NULL,
+    raw_payload JSONB, normalized JSONB NOT NULL, is_filtered_in BOOLEAN NOT NULL DEFAULT FALSE,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_events_severity ON events (severity);
+CREATE INDEX IF NOT EXISTS idx_events_source ON events (source);
+CREATE INDEX IF NOT EXISTS idx_events_created_at ON events (created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_events_src_ip ON events (src_ip);
+CREATE INDEX IF NOT EXISTS idx_events_type ON events (type);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_events_source_external_id ON events (source, external_id) WHERE external_id IS NOT NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS uq_events_m365_raw_hash ON events (source, raw_hash) WHERE source IN ('m365_audit', 'm365_defender_xdr');
+CREATE TABLE IF NOT EXISTS intelligence (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(), ioc TEXT NOT NULL, ioc_type TEXT NOT NULL,
+    provider TEXT NOT NULL, malicious BOOLEAN NOT NULL DEFAULT FALSE, score NUMERIC(4,3) NOT NULL DEFAULT 0.0,
+    raw_response JSONB, checked_at TIMESTAMPTZ NOT NULL DEFAULT now(), UNIQUE (ioc, provider)
+);
+CREATE INDEX IF NOT EXISTS idx_intel_ioc ON intelligence (ioc);
+CREATE TABLE IF NOT EXISTS findings (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(), event_ids UUID[] NOT NULL, category TEXT,
+    threat_classification TEXT, mitre_technique TEXT[], confidence NUMERIC(4,3) NOT NULL DEFAULT 0.0,
+    severity TEXT, evidence JSONB NOT NULL, ai_result JSONB NOT NULL, recommendation TEXT,
+    status TEXT NOT NULL DEFAULT 'open', created_time TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_findings_category ON findings (category);
+CREATE INDEX IF NOT EXISTS idx_findings_severity ON findings (severity);
+CREATE INDEX IF NOT EXISTS idx_findings_created ON findings (created_time DESC);
+CREATE TABLE IF NOT EXISTS agent_runs (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(), agent_name TEXT NOT NULL,
+    finding_id UUID REFERENCES findings(id) ON DELETE CASCADE, input_payload JSONB,
+    output_payload JSONB, duration_ms INTEGER, created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_agent_runs_finding ON agent_runs (finding_id);
+CREATE TABLE IF NOT EXISTS threat_research (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(), provider TEXT NOT NULL DEFAULT 'cyfirma',
+    title TEXT NOT NULL, url TEXT, summary TEXT, published_at TIMESTAMPTZ,
+    fetched_at TIMESTAMPTZ NOT NULL DEFAULT now(), raw_payload JSONB, UNIQUE (provider, url)
+);
+CREATE INDEX IF NOT EXISTS idx_threat_research_fetched ON threat_research (fetched_at DESC);
+CREATE TABLE IF NOT EXISTS cyfirma_org_vulnerabilities (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(), cve TEXT, severity TEXT, title TEXT,
+    description TEXT, is_zero_day BOOLEAN NOT NULL DEFAULT FALSE, detected_at TIMESTAMPTZ,
+    fetched_at TIMESTAMPTZ NOT NULL DEFAULT now(), raw_payload JSONB, UNIQUE (cve, title)
+);
+CREATE INDEX IF NOT EXISTS idx_cyfirma_vuln_fetched ON cyfirma_org_vulnerabilities (fetched_at DESC);

@@ -1,0 +1,12 @@
+skill: sql_injection
+category: sql_injection
+description: Detects SQL injection and related web-application attacks via Fortigate WAF/IPS logs.
+match:
+  event_types: [web_attack]
+  type_only: true
+  keywords: ["sql injection", "union select", "xss", "cross-site", "cross site", "path traversal", "directory traversal", "command injection", "remote file inclusion", "web attack"]
+priority: 10
+mitre_technique: ["T1190"]
+investigation_steps:
+  - "Identify the targeted web application/endpoint"
+severity_hint: high

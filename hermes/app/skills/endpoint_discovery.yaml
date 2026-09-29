@@ -1,0 +1,13 @@
+skill: endpoint_discovery
+category: reconnaissance
+description: Detects post-compromise host, account, process, and network discovery activity.
+match:
+  mitre_techniques: [T1082, T1047, T1057, T1018, T1087, T1016, T1049]
+  defender_categories: [Discovery]
+  keywords: ["system information discovery", "remote system discovery", "account discovery", "process discovery"]
+priority: 20
+mitre_technique: ["T1082", "T1047"]
+investigation_steps:
+  - "Identify the process and account that initiated discovery"
+  - "Correlate with preceding execution and following lateral movement"
+severity_hint: medium

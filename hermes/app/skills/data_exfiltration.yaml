@@ -1,0 +1,15 @@
+skill: data_exfiltration
+category: data_exfiltration
+description: Detects data exfiltration via Microsoft Purview DLP policy matches.
+match:
+  event_types: [data_exfiltration]
+  type_only: true
+  operations: [DlpRuleMatch, Copy to Removable Media]
+  mitre_techniques: [T1041, T1567]
+  defender_categories: [Exfiltration]
+  keywords: ["dlprulematch", "dlp rule", "exfiltrat", "data loss prevention", "sensitive data"]
+priority: 10
+mitre_technique: ["T1041", "T1567"]
+investigation_steps:
+  - "Identify the specific DLP policy that matched"
+severity_hint: critical

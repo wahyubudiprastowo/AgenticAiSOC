@@ -1,0 +1,14 @@
+skill: suspicious_network
+category: suspicious_network
+description: Confirmed network IDS/IPS activity that does not match a more specific attack skill.
+match:
+  event_types: [network_attack]
+  type_only: true
+  defender_categories: [CommandAndControl, LateralMovement]
+  keywords: ["intrusion", "attack detected", "attack dropped", "ips signature", "command and control", "c2 beacon"]
+  exclude_keywords: ["app passed by firewall", "logon success", "session opened"]
+mitre_technique: []
+investigation_steps:
+  - "Determine whether the source IP is internal or external"
+  - "Enrich the source/destination IP against threat intelligence providers"
+severity_hint: medium

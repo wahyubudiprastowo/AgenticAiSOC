@@ -1,0 +1,17 @@
+skill: phishing
+category: phishing
+description: Detects phishing/BEC activity via URLs, mailbox-rule tampering, OAuth consent grants.
+match:
+  event_types: [phishing]
+  type_only: true
+  operations: [PhishNotAllowed, New-InboxRule, Consent to application]
+  mitre_techniques: [T1566, T1566.001, T1566.002]
+  defender_categories: [Phishing]
+  keywords: ["phishing", "credential harvest", "suspicious url", "spoofed sender", "inboxrule",
+    "new-inboxrule", "consent to application", "phishnotallowed", "malicious email"]
+  exclude_keywords: ["mailitemsaccessed"]
+mitre_technique: ["T1566", "T1098.001"]
+investigation_steps:
+  - "Identify the recipient(s) and whether the email/link was opened"
+  - "Enrich the sender domain / URL against URLhaus and VirusTotal"
+severity_hint: medium
