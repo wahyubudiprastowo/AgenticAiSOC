@@ -284,6 +284,19 @@ class DashboardAttackDetailTests(unittest.TestCase):
         self.assertEqual(detail["provenance"]["kind"], "synthetic_validation")
         self.assertEqual(detail["attack"]["cve_status"], "not_reported_by_source")
 
+    def test_endpoint_malware_user_does_not_turn_asset_into_mail_recipient(self):
+        finding = {"id": "finding-malware", "category": "malware", "threat_classification": "Malware",
+                   "severity": "high", "confidence": 0.8, "evidence": {}, "ai_result": {}}
+        event = {"id": "event-malware", "source": "wazuh", "type": "malware", "severity": "high",
+                 "src_ip": "198.51.100.11", "user_name": "coverage.user", "description": "Malware blocked",
+                 "normalized": {"source": "wazuh", "type": "malware", "src_ip": "198.51.100.11",
+                                "destination": "coverage-endpoint-01", "user_name": "coverage.user",
+                                "raw_kv": {"action": "quarantined"}}}
+        detail = dashboard_agg.attack_detail(finding, [event])
+        self.assertEqual(detail["attack"]["path"]["kind"], "attack")
+        self.assertEqual(detail["attack"]["path"]["destination_asset_values"], ["coverage-endpoint-01"])
+        self.assertEqual(detail["attack"]["users"], ["coverage.user"])
+
 
 class QdrantMemoryTests(unittest.TestCase):
     def test_point_id_is_stable_per_finding(self):

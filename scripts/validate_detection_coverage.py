@@ -72,6 +72,9 @@ class CategoryTest:
     manual_only: bool = False
     applicable: bool = True
     skip_reason: Optional[str] = None
+    src_ip: Optional[str] = None
+    destination: Optional[str] = None
+    user_name: Optional[str] = None
 
     def payload(self, marker: str) -> dict[str, Any]:
         description = f"[COVERAGE_TEST:{marker}] {self.description}"
@@ -79,27 +82,28 @@ class CategoryTest:
                "coverage_expected_category": self.expected_category}
         return {"source": self.source, "type": self.event_type, "description": description,
                 "severity": self.severity, "mitre_technique": list(self.mitre),
+                "src_ip": self.src_ip, "destination": self.destination, "user_name": self.user_name,
                 "test_marker": marker, "is_synthetic_test": True, "raw": raw}
 
 
 TESTS: dict[int, CategoryTest] = {
-    1: CategoryTest("Malware", "malware", "wazuh", "malware", "Synthetic EICAR-style malware signature alert", mitre=("T1105",), raw={"rule_id": "RULE-MAL-001", "artifact": "EICAR-TEST-SIGNATURE"}),
-    2: CategoryTest("Ransomware", "ransomware", "wazuh", "ransomware", "Synthetic mass file encryption and shadow-copy deletion behavior", "critical", ("T1486", "T1490"), {"rule_id": "RULE-RANS-001", "files_renamed_count": 500}),
-    3: CategoryTest("Phishing", "phishing", "m365_audit", "phishing", "Synthetic suspicious inbox rule forward-and-delete phishing signal", mitre=("T1566",), raw={"rule_id": "RULE-PHISH-001", "operation": "New-InboxRule"}),
-    4: CategoryTest("Credential Theft", "credential_attack", "syslog", "credential_attack", "Synthetic password spray with multiple authentication failures", mitre=("T1110",), raw={"rule_id": "RULE-CRED-001", "failed_attempts": 25}),
-    5: CategoryTest("Network Intrusion", "suspicious_network", "fortigate", "network_attack", "Synthetic Fortigate IPS signature attack dropped", mitre=("T1190",), raw={"rule_id": "RULE-NETI-001", "signature": "Exploit.Generic.CoverageTest"}),
-    6: CategoryTest("Reconnaissance", "reconnaissance", "fortigate", "reconnaissance", "Synthetic Nmap-like port scan detected", "medium", ("T1595", "T1046"), {"rule_id": "RULE-RECON-001", "ports_scanned": 200}),
-    7: CategoryTest("Vulnerability", "vulnerability_management", "wazuh", "vulnerability", "Synthetic CVE-9999-0001 vulnerable package match", mitre=("T1190",), raw={"rule_id": "RULE-VULN-001", "cve": "CVE-9999-0001"}),
-    8: CategoryTest("File Integrity", "file_integrity", "wazuh", "fim_change", "FIM: synthetic modification of /etc/coverage_test_critical_file", mitre=("T1565",), raw={"rule_id": "RULE-FIM-001", "fim_path": "/etc/coverage_test_critical_file", "wazuh_rule_groups": ["syscheck"]}),
-    9: CategoryTest("Supply Chain", "supply_chain", "wazuh", "fim_change", "FIM: synthetic dependency change in /opt/app/node_modules/coverage-test", "critical", ("T1195.002",), {"rule_id": "RULE-SUPPLY-001", "fim_path": "/opt/app/node_modules/coverage-test", "wazuh_rule_groups": ["syscheck"]}),
-    10: CategoryTest("DDoS", "ddos", "fortigate", "dos_attack", "Synthetic volumetric SYN flood DoS sensor signal", "critical", ("T1498",), {"rule_id": "RULE-DDOS-001", "packets_per_second": 500000}),
-    11: CategoryTest("SQL Injection", "sql_injection", "fortigate", "web_attack", "Synthetic SQL injection UNION SELECT WAF signature", mitre=("T1190",), raw={"rule_id": "RULE-SQLI-001", "signature": "SQL Injection"}),
-    12: CategoryTest("Insider Threat", "insider_threat", "m365_audit", "insider_risk", "Synthetic correlated bulk download by one test account", mitre=("T1530",), raw={"rule_id": "RULE-INSIDER-001", "files_downloaded": 800}),
-    13: CategoryTest("Data Exfiltration", "data_exfiltration", "m365_audit", "data_exfiltration", "Synthetic Purview DLP sensitive-data exfiltration policy match", "critical", ("T1041", "T1567"), {"rule_id": "RULE-DLP-001", "operation": "DlpRuleMatch"}),
-    14: CategoryTest("APT Activity", "apt_activity", "threat_intel", "security_alert", "Synthetic APT29 threat actor attributed security alert", "critical", ("T1071", "T1105"), {"rule_id": "RULE-APT-001", "attribution": "APT29"}),
+    1: CategoryTest("Malware", "malware", "wazuh", "malware", "Synthetic EICAR-style malware signature alert", mitre=("T1105",), raw={"rule_id": "RULE-MAL-001", "artifact": "EICAR-TEST-SIGNATURE", "action": "quarantined"}, src_ip="198.51.100.11", destination="coverage-endpoint-01", user_name="coverage.user"),
+    2: CategoryTest("Ransomware", "ransomware", "wazuh", "ransomware", "Synthetic mass file encryption and shadow-copy deletion behavior", "critical", ("T1486", "T1490"), {"rule_id": "RULE-RANS-001", "files_renamed_count": 500, "action": "blocked"}, src_ip="198.51.100.12", destination="coverage-fileserver-01", user_name="coverage.user"),
+    3: CategoryTest("Phishing", "phishing", "m365_audit", "phishing", "Synthetic suspicious inbox rule forward-and-delete phishing signal", mitre=("T1566",), raw={"rule_id": "RULE-PHISH-001", "operation": "New-InboxRule", "P1Sender": "attacker@example.test", "SenderIp": "198.51.100.13", "Recipients": ["coverage.user@example.test"], "DeliveryAction": "Delivered"}, src_ip="198.51.100.13", destination="coverage.user@example.test", user_name="coverage.user@example.test"),
+    4: CategoryTest("Credential Theft", "credential_attack", "syslog", "credential_attack", "Synthetic password spray with multiple authentication failures", mitre=("T1110",), raw={"rule_id": "RULE-CRED-001", "failed_attempts": 25, "action": "authentication_failed", "targetUserName": "coverage.admin"}, src_ip="198.51.100.14", destination="coverage-domain-controller", user_name="coverage.admin"),
+    5: CategoryTest("Network Intrusion", "suspicious_network", "fortigate", "network_attack", "Synthetic Fortigate IPS signature attack dropped", mitre=("T1190",), raw={"rule_id": "RULE-NETI-001", "signature": "Exploit.Generic.CoverageTest", "action": "dropped"}, src_ip="198.51.100.15", destination="192.0.2.15"),
+    6: CategoryTest("Reconnaissance", "reconnaissance", "fortigate", "reconnaissance", "Synthetic Nmap-like port scan detected", "medium", ("T1595", "T1046"), {"rule_id": "RULE-RECON-001", "ports_scanned": 200, "action": "detected"}, src_ip="198.51.100.16", destination="192.0.2.16"),
+    7: CategoryTest("Vulnerability", "vulnerability_management", "wazuh", "vulnerability", "Synthetic CVE-9999-0001 vulnerable package match", mitre=("T1190",), raw={"rule_id": "RULE-VULN-001", "cve": "CVE-9999-0001", "package": {"name": "coverage-package", "version": "1.0"}}, destination="coverage-endpoint-07"),
+    8: CategoryTest("File Integrity", "file_integrity", "wazuh", "fim_change", "FIM: synthetic modification of /etc/coverage_test_critical_file", mitre=("T1565",), raw={"rule_id": "RULE-FIM-001", "fim_path": "/etc/coverage_test_critical_file", "fim_event": "modified", "wazuh_rule_groups": ["syscheck"]}, destination="coverage-endpoint-08", user_name="root"),
+    9: CategoryTest("Supply Chain", "supply_chain", "wazuh", "fim_change", "FIM: synthetic dependency change in /opt/app/node_modules/coverage-test", "critical", ("T1195.002",), {"rule_id": "RULE-SUPPLY-001", "fim_path": "/opt/app/node_modules/coverage-test", "fim_event": "modified", "wazuh_rule_groups": ["syscheck"]}, destination="coverage-build-server", user_name="build.service"),
+    10: CategoryTest("DDoS", "ddos", "fortigate", "dos_attack", "Synthetic volumetric SYN flood DoS sensor signal", "critical", ("T1498",), {"rule_id": "RULE-DDOS-001", "packets_per_second": 500000, "action": "blocked"}, src_ip="198.51.100.20", destination="192.0.2.20"),
+    11: CategoryTest("SQL Injection", "sql_injection", "fortigate", "web_attack", "Synthetic SQL injection UNION SELECT WAF signature", mitre=("T1190",), raw={"rule_id": "RULE-SQLI-001", "signature": "SQL Injection", "action": "blocked"}, src_ip="198.51.100.21", destination="192.0.2.21"),
+    12: CategoryTest("Insider Threat", "insider_threat", "m365_audit", "insider_risk", "Synthetic correlated bulk download by one test account", mitre=("T1530",), raw={"rule_id": "RULE-INSIDER-001", "files_downloaded": 800, "action": "bulk_download"}, src_ip="198.51.100.22", destination="coverage-sharepoint-site", user_name="coverage.insider@example.test"),
+    13: CategoryTest("Data Exfiltration", "data_exfiltration", "m365_audit", "data_exfiltration", "Synthetic Purview DLP sensitive-data exfiltration policy match", "critical", ("T1041", "T1567"), {"rule_id": "RULE-DLP-001", "operation": "DlpRuleMatch", "action": "blocked"}, src_ip="198.51.100.23", destination="coverage-external-destination", user_name="coverage.user@example.test"),
+    14: CategoryTest("APT Activity", "apt_activity", "threat_intel", "security_alert", "Synthetic APT29 threat actor attributed security alert", "critical", ("T1071", "T1105"), {"rule_id": "RULE-APT-001", "attribution": "APT29", "action": "detected"}, src_ip="198.51.100.24", destination="coverage-command-server"),
     15: CategoryTest("Zero-Day", "zero_day", "review_only", "zero_day", "Not sent", applicable=False, skip_reason="Unknown-unknown cannot be validated honestly with a known signature; perform process and anomaly-detection review."),
-    16: CategoryTest("Cloud-Native", "cloud_native", "aws_cloudtrail", "cloud_alert", "Synthetic AWS IAM root UnauthorizedAccess cloud alert", "critical", ("T1078.004", "T1526"), {"cloud_provider": "aws"}, manual_only=True),
-    17: CategoryTest("Container/Kubernetes", "container_kubernetes", "k8s_audit", "k8s_alert", "Synthetic privileged container hostPath mount", "high", ("T1610", "T1613"), {"namespace": "coverage-test", "privileged": True}, manual_only=True),
+    16: CategoryTest("Cloud-Native", "cloud_native", "aws_cloudtrail", "cloud_alert", "Synthetic AWS IAM root UnauthorizedAccess cloud alert", "critical", ("T1078.004", "T1526"), {"cloud_provider": "aws", "action": "UnauthorizedAccess"}, manual_only=True, src_ip="198.51.100.26", destination="coverage-aws-account", user_name="coverage-root"),
+    17: CategoryTest("Container/Kubernetes", "container_kubernetes", "k8s_audit", "k8s_alert", "Synthetic privileged container hostPath mount", "high", ("T1610", "T1613"), {"namespace": "coverage-test", "privileged": True, "action": "create_privileged_pod"}, manual_only=True, src_ip="198.51.100.27", destination="coverage-k8s-cluster", user_name="system:serviceaccount:coverage-test:validator"),
 }
 
 STATUS_LABELS = {
@@ -108,6 +112,7 @@ STATUS_LABELS = {
     "FAIL_NO_FINDING": "FAIL - Event stored but no linked finding",
     "FAIL_WRONG_CATEGORY": "FAIL - Finding category does not match",
     "FAIL_BAD_EVIDENCE": "FAIL - Finding is linked but marker is absent from evidence",
+    "FAIL_INCOMPLETE_DETAIL": "FAIL - Attack Details is missing required evidence fields",
     "ERROR_SEND_FAILED": "ERROR - Event ingestion failed",
     "NOT_TESTABLE_AUTOMATICALLY": "Not testable automatically",
     "DRY_RUN": "Dry-run - No event sent",
@@ -184,6 +189,34 @@ def find_by_db(cfg: Config, event_id: str) -> Optional[dict]:
             return dict(row) if row else None
 
 
+def get_attack_detail(cfg: Config, finding_id: str) -> dict:
+    response = requests.get(f"{cfg.dashboard_url.rstrip('/')}/api/findings/{finding_id}", timeout=25)
+    response.raise_for_status()
+    return response.json()
+
+
+def validate_attack_detail(number: int, detail: dict) -> tuple[dict[str, bool], list[str]]:
+    finding = detail.get("finding") or {}; attack = detail.get("attack") or {}; path = attack.get("path") or {}
+    source_optional = {7, 8, 9}
+    action_optional = {7}
+    user_required = {1, 2, 3, 4, 8, 9, 12, 13, 16, 17}
+    cve_required = {7}
+    source_present = bool(path.get("source_ip_values"))
+    destination_present = bool(path.get("destination_asset_values") or path.get("destination_ip_values"))
+    checks = {
+        "attack_type": bool(finding.get("classification")),
+        "source_ip": source_present or number in source_optional,
+        "destination_asset": destination_present,
+        "action": bool(attack.get("actions")) or number in action_optional,
+        "user": bool(attack.get("users")) or number not in user_required,
+        "cve": bool(attack.get("cves")) or number not in cve_required,
+        "cve_status": bool(attack.get("cve_status")),
+        "category": bool(finding.get("category")),
+        "source_system": bool(attack.get("sources")),
+    }
+    return checks, [name for name, passed in checks.items() if not passed]
+
+
 def poll_finding(cfg: Config, event_id: str) -> tuple[Optional[dict], float, str]:
     started = time.monotonic(); last_error = ""
     while time.monotonic() - started < cfg.timeout:
@@ -207,6 +240,7 @@ def run_test(cfg: Config, number: int, logger: logging.Logger) -> dict[str, Any]
         "event_stored": False, "event_db_id": None, "finding_found": False, "finding_id": None,
         "analysis_status": None,
         "evidence_marker_verified": False, "latency_seconds": None, "lookup_method": None,
+        "attack_detail_checks": None, "attack_detail_missing": [],
         "result_status": None, "note": None, "payload": test.payload(marker) if test.applicable else None}
     if not test.applicable:
         result.update(result_status="NOT_TESTABLE_AUTOMATICALLY", note=test.skip_reason)
@@ -241,8 +275,19 @@ def run_test(cfg: Config, number: int, logger: logging.Logger) -> dict[str, Any]
     elif not marker_verified:
         result.update(result_status="FAIL_BAD_EVIDENCE", note="Unique marker absent from finding evidence")
     else:
-        result.update(result_status="PASS_MANUAL_ONLY" if test.manual_only else "PASS",
-                      note=f"Exact event UUID, expected category, and marker verified via {method}")
+        try:
+            detail = get_attack_detail(cfg, finding_id)
+            detail_checks, detail_missing = validate_attack_detail(number, detail)
+            result.update(attack_detail_checks=detail_checks, attack_detail_missing=detail_missing)
+        except (requests.RequestException, ValueError) as exc:
+            detail_checks, detail_missing = {}, [f"detail_api:{type(exc).__name__}"]
+            result.update(attack_detail_checks=detail_checks, attack_detail_missing=detail_missing)
+        if detail_missing:
+            result.update(result_status="FAIL_INCOMPLETE_DETAIL",
+                          note="Attack Details missing required fields: " + ", ".join(detail_missing))
+        else:
+            result.update(result_status="PASS_MANUAL_ONLY" if test.manual_only else "PASS",
+                          note=f"Exact event UUID, category, marker, and Attack Details fields verified via {method}")
     logger.info("[%02d] %s: %s finding=%s category=%s latency=%.3fs", number, test.name,
                 result["result_status"], finding_id, actual_category, latency)
     return result

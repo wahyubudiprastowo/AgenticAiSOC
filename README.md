@@ -85,7 +85,10 @@ curl --get http://localhost:38080/api/findings/analytics \
 database event UUID returned by SOC Core. A category passes only when the
 finding links that UUID, has the expected deterministic category, and contains the
 unique test marker in its evidence. This prevents an unrelated recent finding
-from producing a false PASS.
+from producing a false PASS. It also loads the dashboard detail endpoint and
+checks the category-specific Attack Path plus Attack type, Action, User, CVE,
+CVE Status, Category, and Source system. Vulnerability and local FIM tests treat
+a remote source IP as contextual/not applicable instead of inventing one.
 
 Set up the isolated validator dependencies and review all payloads first:
 

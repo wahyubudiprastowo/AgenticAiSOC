@@ -34,6 +34,13 @@ _MANUAL_INGEST_ONLY_CATEGORIES = {"Cloud-Native Attack", "Container/Kubernetes"}
 _SEVERITY_ORDER = ["critical", "high", "medium", "low"]
 _SEVERITY_COLOR = {"critical": "#f85149", "high": "#ff8a3d", "medium": "#e3b341", "low": "#3fb950"}
 _SENSITIVE_KEY_PARTS = ("password", "passwd", "secret", "token", "api_key", "apikey", "authorization", "cookie", "credential")
+_SOURCE_CONTEXTUAL_CATEGORIES = {"vulnerability_management", "file_integrity", "supply_chain", "zero_day"}
+_ACTION_CONTEXTUAL_CATEGORIES = {"vulnerability_management", "zero_day"}
+_USER_REQUIRED_CATEGORIES = {"malware", "ransomware", "phishing", "credential_attack", "file_integrity",
+                             "supply_chain", "insider_threat", "data_exfiltration", "cloud_native",
+                             "container_kubernetes"}
+_CVE_REQUIRED_CATEGORIES = {"vulnerability_management", "zero_day"}
+_MANUAL_SOURCE_CATEGORIES = {"cloud_native", "container_kubernetes"}
 
 def _json_object(value) -> dict:
     if isinstance(value, dict): return value
@@ -139,7 +146,9 @@ def attack_detail(finding: dict, events: list[dict]) -> dict:
                        _deep_values(combined, {"hostname", "devicename", "computer", "agent_name"})])
         asset_ips = _unique([asset_ips, [value for value in dst if _is_ip(value)]])
         dst = [value for value in dst if not _is_ip(value)]
-        if affected and event_type in {"phishing", "malware", "mailbox_rule_change", "oauth_consent", "data_exfiltration"}:
+        is_email_event = bool(source in {"m365_audit", "m365_defender_xdr"} or identities
+                              or event_type in {"phishing", "mailbox_rule_change"})
+        if affected and is_email_event and event_type in {"phishing", "malware", "mailbox_rule_change", "oauth_consent", "data_exfiltration"}:
             # For message/account activity, the affected account is the destination.
             # Fields such as DeviceName="ThreatIntel" describe the M365 workload,
             # not a destination host.
@@ -204,7 +213,8 @@ def attack_detail(finding: dict, events: list[dict]) -> dict:
     unique_dst = _unique(destinations); unique_dst_ips = _unique(destination_ips)
     unique_affected = _unique(affected_users); unique_actors = _unique(actors)
     unique_users = unique_affected or unique_actors
-    email_context = bool(unique_affected and (unique_identities or any(t in {"phishing", "malware"} for t in event_types)))
+    email_context = bool(unique_affected and (unique_identities or "phishing" in event_types
+                         or any(source in {"m365_audit", "m365_defender_xdr"} for source in unique_sources)))
     if category in {"vulnerability_management", "zero_day"}:
         path = {"kind": "exposure", "kind_label": "Vulnerability exposure", "title": "Attack path", "status": "contextual",
                 "origin_label": "Detection source", "origin_values": unique_sources,
@@ -253,6 +263,55 @@ def attack_detail(finding: dict, events: list[dict]) -> dict:
                   "is_synthetic": is_synthetic,
                   "explanation": ("This finding was created by a coverage test. Blank attack-path fields reflect the test payload, not missing production telemetry."
                                   if is_synthetic else "This finding is linked to collected source telemetry.")}
+    field_checks = {
+        "attack_type": {"label": "Attack type", "status": "observed" if finding.get("threat_classification") else "missing"},
+        "source_ip": {"label": "Source IP", "status": "observed" if unique_src else
+                      "not_applicable" if category in _SOURCE_CONTEXTUAL_CATEGORIES else "missing"},
+        "destination": {"label": "Destination asset or account", "status": "observed" if (unique_dst or unique_dst_ips or unique_affected) else "missing"},
+        "action": {"label": "Action", "status": "observed" if _unique(actions) else
+                   "not_applicable" if category in _ACTION_CONTEXTUAL_CATEGORIES else "missing"},
+        "user": {"label": "User", "status": "observed" if unique_users else
+                 "missing" if category in _USER_REQUIRED_CATEGORIES else "not_applicable"},
+        "cve": {"label": "CVE", "status": "observed" if unique_cves else
+                "missing" if category in _CVE_REQUIRED_CATEGORIES else "not_applicable"},
+        "category": {"label": "Category", "status": "observed" if category != "unknown" else "missing"},
+        "source_system": {"label": "Source system", "status": "observed" if unique_sources else "missing"},
+        "linked_event": {"label": "Linked source event", "status": "observed" if event_details else "missing"},
+    }
+    applicable = [item for item in field_checks.values() if item["status"] != "not_applicable"]
+    observed = [item["label"] for item in field_checks.values() if item["status"] == "observed"]
+    missing = [item["label"] for item in field_checks.values() if item["status"] == "missing"]
+    not_applicable = [item["label"] for item in field_checks.values() if item["status"] == "not_applicable"]
+    completeness = round(sum(item["status"] == "observed" for item in applicable) / len(applicable) * 100) if applicable else 0
+    if is_synthetic:
+        maturity, maturity_label = "validation_only", "Validation only"
+    elif not event_details:
+        maturity, maturity_label = "unverified", "Unverified"
+    elif missing:
+        maturity, maturity_label = "partial_evidence", "Partial source evidence"
+    else:
+        maturity, maturity_label = "source_evidenced", "Source evidenced"
+    limitations = []
+    if is_synthetic:
+        limitations.append("Synthetic coverage event: proves pipeline routing and field rendering, not source-sensor detection efficacy.")
+    if missing:
+        limitations.append("Required evidence not reported: " + ", ".join(missing) + ".")
+    if len(event_details) == 1:
+        limitations.append("Only one linked source event is available; the displayed path is event context, not a correlated multi-stage attack chain.")
+    elif not event_details:
+        limitations.append("No linked source event is available, so the finding cannot be independently traced to source telemetry.")
+    if not normalized_indicators:
+        limitations.append("No persisted IOC-enrichment result is attached to this finding.")
+    if not mitre_ids:
+        limitations.append("No MITRE ATT&CK technique is mapped to this finding.")
+    if category in _MANUAL_SOURCE_CATEGORIES:
+        limitations.append("This category currently uses manual API ingestion; a native cloud or Kubernetes collector is not connected.")
+    if category == "reconnaissance" and any(technique in {"T1047", "T1082"} for technique in mitre_ids):
+        limitations.append("Endpoint discovery telemetry is grouped under Reconnaissance; it may not represent external network scanning.")
+    quality = {"maturity": maturity, "maturity_label": maturity_label, "completeness_pct": completeness,
+               "path_status": path.get("status") or "partial", "linked_event_count": len(event_details),
+               "field_checks": field_checks, "observed_fields": observed, "missing_fields": missing,
+               "not_applicable_fields": not_applicable, "limitations": limitations}
     return {
         "finding": {"id": str(finding.get("id") or ""), "classification": finding.get("threat_classification") or "Unknown",
                     "category": finding.get("category") or "unknown", "severity": finding.get("severity") or "low",
@@ -266,6 +325,7 @@ def attack_detail(finding: dict, events: list[dict]) -> dict:
                    "cves": unique_cves, "cve_status": cve_status, "cve_explanation": cve_explanation,
                    "field_status": field_status, "path": path, "indicators": normalized_indicators},
         "provenance": provenance,
+        "quality": quality,
         "mitre": [{"id": technique, "name": MITRE_NAMES.get(technique, technique)} for technique in mitre_ids],
         "evidence": evidence.get("evidence", []) if isinstance(evidence.get("evidence", []), list) else [],
         "evidence_summary": evidence.get("finding"), "ai_result": _redact(ai_result), "events": event_details,

@@ -24,6 +24,13 @@ DASHBOARD_HEALTH_TIMEOUT_SECONDS = max(2.0, float(os.getenv("DASHBOARD_HEALTH_TI
 DASHBOARD_HEALTH_GRACE_SECONDS = max(0.0, float(os.getenv("DASHBOARD_HEALTH_GRACE_SECONDS", "45")))
 app = FastAPI(title="Agentic SOC Dashboard", version="4.0.0")
 templates = Jinja2Templates(directory="app/templates")
+@app.middleware("http")
+async def disable_stale_dashboard_cache(request: Request, call_next):
+    response = await call_next(request)
+    if request.url.path == "/" or request.url.path.startswith("/api/"):
+        response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
+        response.headers["Pragma"] = "no-cache"
+    return response
 @app.get("/health")
 async def health() -> dict: return {"status": "ok", "service": "dashboard"}
 _SERVICES = {"Syslog Collector": f"{SYSLOG_COLLECTOR_URL}/health", "SOC Core": f"{SOC_CORE_URL}/health",
@@ -183,9 +190,9 @@ async def api_filtered_overview(start: datetime | None = None, end: datetime | N
         "category": category}.items() if value not in (None, "")}
     try:
         async with httpx.AsyncClient() as client:
-            core_request = client.get(f"{SOC_CORE_URL}/analytics/overview", params={**params, "limit": 25}, timeout=10.0)
-            findings_request = client.get(f"{SOC_CORE_URL}/findings/search", params={**params, "limit": 200, "offset": 0}, timeout=10.0)
-            analytics_request = client.get(f"{SOC_CORE_URL}/findings/analytics", params=params, timeout=10.0)
+            core_request = client.get(f"{SOC_CORE_URL}/analytics/overview", params={**params, "limit": 25}, timeout=20.0)
+            findings_request = client.get(f"{SOC_CORE_URL}/findings/search", params={**params, "limit": 200, "offset": 0}, timeout=20.0)
+            analytics_request = client.get(f"{SOC_CORE_URL}/findings/analytics", params=params, timeout=20.0)
             core_response, findings_response, analytics_response = await asyncio.gather(
                 core_request, findings_request, analytics_request)
             for response in (core_response, findings_response, analytics_response): response.raise_for_status()
@@ -216,15 +223,20 @@ async def _findings_filtered(path: str, start: datetime | None, end: datetime | 
     params = {key: value for key, value in {"start": start.isoformat() if start else None,
         "end": end.isoformat() if end else None, "severity": severity, "category": category, "q": q, **extra}.items()
         if value not in (None, "")}
-    try:
-        async with httpx.AsyncClient() as client:
-            response = await client.get(f"{SOC_CORE_URL}{path}", params=params, timeout=max(DASHBOARD_UPSTREAM_TIMEOUT_SECONDS, 10.0))
-            if response.status_code == 400: raise HTTPException(status_code=400, detail=response.json().get("detail", "invalid filter"))
-            response.raise_for_status(); return response.json()
-    except HTTPException: raise
-    except Exception as exc:
-        logger.warning("SOC Core finding query failed: %s", exc)
-        raise HTTPException(status_code=502, detail="finding search service unavailable")
+    query_timeout = max(DASHBOARD_UPSTREAM_TIMEOUT_SECONDS, 20.0)
+    async with httpx.AsyncClient() as client:
+        last_error = None
+        for attempt in range(2):
+            try:
+                response = await client.get(f"{SOC_CORE_URL}{path}", params=params, timeout=query_timeout)
+                if response.status_code == 400: raise HTTPException(status_code=400, detail=response.json().get("detail", "invalid filter"))
+                response.raise_for_status(); return response.json()
+            except HTTPException: raise
+            except Exception as exc:
+                last_error = exc
+                if attempt == 0: await asyncio.sleep(0.12)
+    logger.warning("SOC Core finding query failed after retry: %s", last_error)
+    raise HTTPException(status_code=502, detail="finding search service unavailable")
 @app.get("/api/findings/search")
 async def api_findings_search(start: datetime | None = None, end: datetime | None = None,
                               limit: int = Query(100, ge=1, le=200), offset: int = Query(0, ge=0),
