@@ -53,8 +53,9 @@ def process_event(event: dict) -> str:
     db.update_event_decision(event_uuid, event)
     if forward:
         enriched = dict(event); enriched["db_id"] = event_uuid; enriched["ioc_hits"] = ioc_hits
-        detection = detections.classify(event)
+        detection = detections.classify(event, ioc_hits=ioc_hits)
         if detection:
+            enriched["detection"] = detection
             enriched["finding_id"] = db.insert_deterministic_finding(event_uuid, event, detection, ioc_hits)
             db.upsert_finding_indicators(enriched["finding_id"], event_uuid, ioc_hits)
         redis_client.push_filtered_event(enriched)

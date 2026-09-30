@@ -1,14 +1,14 @@
 skill: phishing
 category: phishing
-description: Detects phishing/BEC activity via URLs, mailbox-rule tampering, OAuth consent grants.
+description: Detects phishing/BEC activity via malicious mail, URLs, and mailbox-rule tampering.
 match:
   event_types: [phishing]
   type_only: true
-  operations: [PhishNotAllowed, New-InboxRule, Consent to application]
+  operations: [PhishNotAllowed, New-InboxRule]
   mitre_techniques: [T1566, T1566.001, T1566.002]
   defender_categories: [Phishing]
   keywords: ["phishing", "credential harvest", "suspicious url", "spoofed sender", "inboxrule",
-    "new-inboxrule", "consent to application", "phishnotallowed", "malicious email"]
+    "new-inboxrule", "phishnotallowed", "malicious email"]
   exclude_keywords: ["mailitemsaccessed"]
 mitre_technique: ["T1566", "T1098.001"]
 investigation_steps:

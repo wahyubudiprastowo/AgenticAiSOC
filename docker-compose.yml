@@ -43,7 +43,9 @@ services:
     restart: unless-stopped
 
   soc-core:
-    build: ./soc-core
+    build:
+      context: .
+      dockerfile: soc-core/Dockerfile
     container_name: agentic-soc-core
     env_file: .env
     ports:
@@ -72,7 +74,9 @@ services:
     restart: unless-stopped
 
   hermes:
-    build: ./hermes
+    build:
+      context: .
+      dockerfile: hermes/Dockerfile
     container_name: agentic-soc-hermes
     env_file: .env
     ports:
@@ -87,7 +91,9 @@ services:
     restart: unless-stopped
 
   jev:
-    build: ./jev-client
+    build:
+      context: .
+      dockerfile: jev-client/Dockerfile
     container_name: agentic-soc-jev
     env_file: .env
     expose:
@@ -133,7 +139,9 @@ services:
     restart: unless-stopped
 
   dashboard:
-    build: ./dashboard
+    build:
+      context: .
+      dockerfile: dashboard/Dockerfile
     container_name: agentic-soc-dashboard
     env_file: .env
     environment:

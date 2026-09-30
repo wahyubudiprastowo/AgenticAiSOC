@@ -1,18 +1,27 @@
 from __future__ import annotations
 import logging
 from . import threat_intel_client
+from shared.taxonomy import category_display, normalize_subtype, subtype_display
 logger = logging.getLogger("hermes.agents")
 class TriageAgent:
     def run(self, event: dict, skill: dict) -> dict:
-        category = skill.get("category", "suspicious_network") if skill else "suspicious_network"
+        deterministic = event.get("detection") or {}
+        category = deterministic.get("category") or (skill.get("category") if skill else "suspicious_network")
+        subtype = normalize_subtype(category, deterministic.get("attack_subtype") or (skill or {}).get("attack_subtype"))
         severity = event.get("severity", "low"); ioc_hits = event.get("ioc_hits", [])
-        malicious_ioc = any(h.get("malicious") for h in ioc_hits); confidence = 0.6
-        if severity in ("high", "critical"): confidence += 0.15
-        if malicious_ioc: confidence += 0.15
-        if event.get("mitre_technique"): confidence += 0.05
-        confidence = min(round(confidence, 2), 0.98)
+        malicious_ioc = any(h.get("malicious") for h in ioc_hits)
+        confidence = deterministic.get("confidence")
+        if confidence is None:
+            confidence = 0.6
+            if severity in ("high", "critical"): confidence += 0.15
+            if malicious_ioc: confidence += 0.15
+            if event.get("mitre_technique"): confidence += 0.05
+            confidence = min(round(confidence, 2), 0.98)
         need_analysis = confidence >= 0.5 or severity in ("high", "critical")
-        return {"category": category, "confidence": confidence, "need_analysis": need_analysis}
+        return {"category": category, "attack_subtype": subtype,
+                "classification": deterministic.get("classification") or subtype_display(category, subtype),
+                "confidence": confidence, "need_analysis": need_analysis,
+                "classification_source": "soc_core" if deterministic else "hermes_skill"}
 class InvestigationAgent:
     def run(self, event: dict, skill: dict) -> dict:
         src_ip = event.get("src_ip"); attack_chain = []
@@ -29,14 +38,6 @@ class InvestigationAgent:
         return {"attack_chain": attack_chain, "mitre": mitre, "ioc_hits": ioc_hits,
             "historical_note": f"Source IP {src_ip} correlated against {len(ioc_hits)} provider result(s)." if src_ip else "No source IP available."}
 class ThreatAnalystAgent:
-    _CLASS_BY_CATEGORY = {
-        "credential_attack": "Credential Attack", "malware": "Malware", "phishing": "Phishing", "ransomware": "Ransomware",
-        "suspicious_network": "Suspicious Network Activity", "reconnaissance": "Reconnaissance", "vulnerability_management": "Vulnerability",
-        "file_integrity": "File Integrity", "supply_chain": "Supply Chain Compromise", "ddos": "Denial of Service (DDoS)",
-        "sql_injection": "SQL Injection", "insider_threat": "Insider Threat", "data_exfiltration": "Data Exfiltration",
-        "apt_activity": "APT Activity", "zero_day": "Zero-Day Exploitation", "cloud_native": "Cloud-Native Attack",
-        "container_kubernetes": "Container/Kubernetes Threat",
-    }
     def run(self, triage: dict, investigation: dict, event: dict | None = None) -> dict:
         category = triage.get("category", "suspicious_network"); ioc_hits = investigation.get("ioc_hits", []) or []
         malicious_ioc = any(h.get("malicious") for h in ioc_hits)
@@ -60,4 +61,4 @@ class ThreatAnalystAgent:
         avg = (credibility + authority + relevant) / 3
         bucket = "C4" if avg > 0.9 else "C3" if avg > 0.75 else "C2" if avg > 0.5 else "C1"
         return {"threat_classification_bucket": bucket, "credibility": credibility, "authority": authority,
-            "relevant": relevant, "type": self._CLASS_BY_CATEGORY.get(category, "Unknown")}
+            "relevant": relevant, "type": triage.get("classification") or category_display(category)}

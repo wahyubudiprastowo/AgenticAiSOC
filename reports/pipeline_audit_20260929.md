@@ -2,6 +2,14 @@
 
 Audit time: 2026-09-29 UTC / 2026-09-30 Asia/Jakarta
 
+Update after accuracy phase 1 (2026-09-30 08:19 UTC): the database held
+979,592 events, 247,582 forwarded events, and 117,600 findings. The earliest
+finding remained `2026-09-27 21:22:54+07`, proving the historical range was
+preserved. Of the findings, 76,261 are legacy rows without `primary_event_id`
+and 41,339 use current event-level traceability. One row was briefly
+`pending_ai`; the Hermes queue was zero. Counts continue increasing while
+collectors run.
+
 ## Executive assessment
 
 The platform is receiving and persisting real Wazuh and Microsoft 365 data. It is not currently true that every incoming log can be identified as an attack. Every accepted event can be stored and normalized, but a finding should only be created when evidence matches a detection rule or correlation. Routine and unsupported events must remain non-findings.
@@ -32,7 +40,8 @@ At audit time:
 
 `soc-core/app/detections.py` and `hermes/app/skills/*.yaml` both classify the same event. This is intentional for resilience: SOC Core persists a finding before optional AI. The current path does not create duplicate findings because `findings.primary_event_id` is unique and Hermes receives `finding_id` to update.
 
-The risk is taxonomy drift. Category names and mappings are duplicated in:
+The original risk was taxonomy drift because category names and mappings were
+duplicated in:
 
 - SOC Core deterministic classification;
 - 20 Hermes YAML skills;
@@ -41,27 +50,47 @@ The risk is taxonomy drift. Category names and mappings are duplicated in:
 - dashboard category order and labels;
 - validation scripts.
 
-The audit script checks some of this duplication, but there is no single versioned taxonomy registry.
+This is now controlled by `config/detection_taxonomy.yaml` (version
+`2026.09.30`). SOC Core, Hermes, Jev, dashboard historical inference, and the
+audit verifier load or validate against that registry. Stable category IDs are
+retained for compatibility; attack family and subtype carry the precise label.
 
 ### Historical and current finding schemas
 
-76,260 findings have no `primary_event_id`; 14,976 findings in the initial audit sample were created by the current SOC Core path. This does not currently duplicate event findings, but historical rows have weaker provenance and IOC attachment than new rows.
+76,261 findings have no `primary_event_id`; 41,339 findings at the phase-1
+snapshot use the current SOC Core path. This does not duplicate event findings,
+but historical rows have weaker provenance and IOC attachment than new rows.
+They are not rewritten: Attack Details derives conservative taxonomy metadata
+at read time and marks whether the subtype was stored, matched from the legacy
+classification label, or obtained from the category default.
 
 ### Reconnaissance and endpoint discovery
 
-External network scanning and post-compromise endpoint discovery both map to `reconnaissance`. For example, Wazuh WMI System Information Discovery (`T1082`, `T1047`) is displayed in the same category as a Fortigate/Nmap port scan. The label is therefore too broad for incident interpretation.
+The stable parent remains `reconnaissance`, while `attack_subtype` now separates
+external active scanning, network-service scanning, endpoint system discovery,
+remote-system discovery, account/process/network discovery, and WMI discovery.
+The dashboard displays the subtype, so Wazuh WMI/System Discovery is no longer
+presented as a port scan.
 
 ### SQL injection and generic web attacks
 
-`web_attack` maps to `sql_injection`, although the syslog parser also recognizes XSS, path traversal, command injection, and remote file inclusion. Those attacks are currently mislabeled as SQL Injection at the top-level category.
+The backward-compatible category ID remains `sql_injection`, with display name
+**Web Application Attack**. Deterministic subtypes now distinguish SQL injection,
+XSS, path traversal, command injection, remote file inclusion, and unknown web
+exploits.
 
 ### Credential attack scope
 
-Brute force, credential dumping, pass-the-hash, OAuth/service-principal persistence, privilege changes, and unfamiliar sign-ins share one `credential_attack` category. The technique IDs preserve some distinction, but the dashboard label alone does not.
+The stable `credential_attack` parent now has explicit subtypes for brute force,
+password spraying, credential stuffing/dumping, LSASS, DCSync, pass-the-hash,
+Kerberoasting, OAuth abuse, privilege changes, and suspicious sign-ins.
 
 ### APT classification
 
-APT can be assigned by SOC Core keywords or by Hermes after IOC provider text contains an actor marker. This is attribution logic, not proof of an APT campaign. It requires explicit provider evidence and should remain visibly marked as attribution confidence.
+Actor reporting is stored separately as `attribution_status` plus cited provider
+evidence. Hermes cannot replace a deterministic attack category with APT based
+on provider text. The parent bucket is now displayed as **Threat Actor
+Attribution**, which remains an assessment and not proof of a campaign.
 
 ## Source and data status
 
@@ -136,10 +165,10 @@ APT can be assigned by SOC Core keywords or by Hermes after IOC provider text co
 | File Integrity | Wazuh present | Active; actor/action context often absent |
 | Supply Chain | No confirmed production sample | Path-keyword heuristic and synthetic validation only |
 | DDoS | No direct production syslog sample | Synthetic Fortigate validation only |
-| SQL Injection | No direct production syslog sample | Synthetic web-attack validation only; category is too narrow |
+| Web Application Attack | No direct production syslog sample | Synthetic WAF/IPS validation only; subtype routing is implemented but needs real source samples |
 | Insider Threat | M365 present | Active; based mainly on bulk-download/external-sharing correlation |
 | Data Exfiltration | No confirmed production sample | Synthetic DLP validation only |
-| APT Activity | No confirmed production attribution | Synthetic/legacy evidence only |
+| Threat Actor Attribution | No confirmed production attribution | Synthetic/legacy evidence only; attribution is context, not proof of a campaign |
 | Zero-Day | No finding | Requires reliable source flag plus no-fix/active-exploitation evidence |
 | Cloud-Native | Manual ingest | No AWS/Azure collector |
 | Container/Kubernetes | Manual ingest | No Kubernetes audit/Falco collector |
@@ -176,11 +205,20 @@ APT can be assigned by SOC Core keywords or by Hermes after IOC provider text co
 
 ### P2 — improve classification accuracy
 
-1. Move taxonomy, category labels, MITRE mapping, and source requirements into one versioned registry.
-2. Add a separate subtype/tactic dimension so endpoint Discovery is not presented as external Reconnaissance.
-3. Split generic web attacks into SQL injection, XSS, path traversal, command injection, and other exploit subtypes while retaining a stable parent category.
-4. Aggregate related M365 mail evidence into incidents instead of creating one finding for every TIMailData record.
-5. Add source-specific parser fixtures from real sanitized Wazuh, Fortigate, Defender, M365, AWS, and Kubernetes payloads.
+Completed in phase 1:
+
+1. Versioned canonical taxonomy shared across the classification pipeline.
+2. Discovery/reconnaissance, web-exploit, and identity-attack subtypes.
+3. Deterministic category authority with Jev proposal/verdict stored separately.
+4. Strict Jev response schema with evidence-reference validation and bounded
+   upstream timeout/circuit behavior.
+
+Still required:
+
+1. Aggregate related M365 mail evidence into incidents instead of creating one
+   finding for every TIMailData record.
+2. Add source-specific parser fixtures from real sanitized Wazuh, Fortigate,
+   Defender, M365, AWS, and Kubernetes payloads.
 
 ### P3 — complete coverage
 
@@ -200,5 +238,21 @@ APT can be assigned by SOC Core keywords or by Hermes after IOC provider text co
 - Generic syslog transport peers are stored as `observer_ip`, not falsely displayed as attacker IP.
 - Jev records `remote` versus `fallback` mode and exposes the upstream error in health without exposing credentials.
 - Defender `InitialAccess` alerts can route to the M365 identity-compromise skill.
+- Added canonical taxonomy/family/subtype metadata to new findings and strict
+  taxonomy validation to Hermes skills and Jev proposals.
+- Jev fallback can no longer replace deterministic category, confidence, or
+  severity. A transactional repair restored 4,594 rows affected by the former
+  zero-confidence fallback behavior; zero affected rows remain.
+- Compact list projections and on-demand details reduced a 100-finding response
+  from about 722 KB to 192 KB and an All Time overview response from about
+  339 KB to 53 KB. PostgreSQL calls run outside the ASGI event loop and wait for
+  a bounded pool slot; 18 concurrent dashboard requests returned HTTP 200.
+- Historical finding fields are inferred only for display and are marked as
+  inferred; stored historical event/finding rows remain unchanged.
 
-Validation after patch: 28 unit tests pass, audit verifier reports 75 PASS / 0 WARN / 0 FAIL, CYFIRMA IOC lookup is live, direct Defender normalization contains 48 expanded alerts and structured evidence, and newly ingested Wazuh informational events show zero forwarded events.
+Validation after phase 1: smoke tests report all services healthy; the audit
+verifier reports 77 PASS / 0 WARN / 0 FAIL; the 17-category detail audit found
+data in 16 categories and correctly reported Zero-Day as zero data; Hermes queue
+depth was zero; and no confidence-zero fallback findings remained. Jev remote
+reasoning is still degraded, CYFIRMA organization vulnerabilities still return
+HTTP 401, and those external issues remain visible in Settings.

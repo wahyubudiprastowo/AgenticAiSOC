@@ -2,6 +2,7 @@ from __future__ import annotations
 import ipaddress, json, os, re
 from collections import Counter
 from datetime import datetime, timezone
+from shared.taxonomy import category_family, infer_subtype, taxonomy_version
 MITRE_NAMES = {
     "T1110": "Brute Force", "T1078": "Valid Accounts", "T1098": "Account Manipulation",
     "T1105": "Ingress Tool Transfer", "T1204": "User Execution", "T1566": "Phishing",
@@ -21,15 +22,19 @@ MITRE_NAMES = {
     "T1003.006": "DCSync", "T1558.003": "Kerberoasting", "T1047": "Windows Management Instrumentation",
     "T1057": "Process Discovery", "T1018": "Remote System Discovery", "T1087": "Account Discovery",
     "T1016": "System Network Configuration Discovery", "T1049": "System Network Connections Discovery",
+    "T1021": "Remote Services", "T1052": "Exfiltration Over Physical Medium",
+    "T1110.003": "Password Spraying", "T1110.004": "Credential Stuffing",
+    "T1114.003": "Email Forwarding Rule", "T1528": "Steal Application Access Token",
+    "T1566.002": "Spearphishing Link", "T1611": "Escape to Host",
 }
 THREAT_TYPE_TAXONOMY = ["Malware", "Ransomware", "Phishing", "Credential Theft", "Network Intrusion",
-    "Reconnaissance", "Vulnerability", "File Integrity", "Supply Chain", "DDoS", "SQL Injection",
-    "Insider Threat", "Data Exfiltration", "APT Activity", "Zero-Day", "Cloud-Native Attack", "Container/Kubernetes"]
+    "Reconnaissance", "Vulnerability", "File Integrity", "Supply Chain", "DDoS", "Web Application Attack",
+    "Insider Threat", "Data Exfiltration", "Threat Actor Attribution", "Zero-Day", "Cloud-Native Attack", "Container/Kubernetes"]
 _CATEGORY_TO_THREAT_TYPE = {"malware": "Malware", "ransomware": "Ransomware", "phishing": "Phishing",
     "credential_attack": "Credential Theft", "suspicious_network": "Network Intrusion", "reconnaissance": "Reconnaissance",
     "vulnerability_management": "Vulnerability", "file_integrity": "File Integrity", "supply_chain": "Supply Chain",
-    "ddos": "DDoS", "sql_injection": "SQL Injection", "insider_threat": "Insider Threat", "data_exfiltration": "Data Exfiltration",
-    "apt_activity": "APT Activity", "zero_day": "Zero-Day", "cloud_native": "Cloud-Native Attack", "container_kubernetes": "Container/Kubernetes"}
+    "ddos": "DDoS", "sql_injection": "Web Application Attack", "insider_threat": "Insider Threat", "data_exfiltration": "Data Exfiltration",
+    "apt_activity": "Threat Actor Attribution", "zero_day": "Zero-Day", "cloud_native": "Cloud-Native Attack", "container_kubernetes": "Container/Kubernetes"}
 _MANUAL_INGEST_ONLY_CATEGORIES = {"Cloud-Native Attack", "Container/Kubernetes"}
 _SEVERITY_ORDER = ["critical", "high", "medium", "low"]
 _SEVERITY_COLOR = {"critical": "#f85149", "high": "#ff8a3d", "medium": "#e3b341", "low": "#3fb950"}
@@ -209,6 +214,11 @@ def attack_detail(finding: dict, events: list[dict]) -> dict:
     mitre_ids = _unique([finding.get("mitre_technique") or [], *[e.get("mitre_techniques", []) for e in event_details]])
     unique_cves = _unique(cves)
     category = finding.get("category") or "unknown"
+    effective_subtype, subtype_origin = infer_subtype(
+        category, finding.get("threat_classification"), finding.get("attack_subtype")
+    )
+    effective_family = finding.get("attack_family") or category_family(category)
+    effective_taxonomy_version = finding.get("taxonomy_version") or taxonomy_version()
     cve_relevant_categories = {"vulnerability_management", "zero_day", "malware", "suspicious_network",
                                "sql_injection", "apt_activity"}
     cve_status = ("observed_in_source_event" if unique_cves else
@@ -312,8 +322,6 @@ def attack_detail(finding: dict, events: list[dict]) -> dict:
         limitations.append("No MITRE ATT&CK technique is mapped to this finding.")
     if category in _MANUAL_SOURCE_CATEGORIES:
         limitations.append("This category currently uses manual API ingestion; a native cloud or Kubernetes collector is not connected.")
-    if category == "reconnaissance" and any(technique in {"T1047", "T1082"} for technique in mitre_ids):
-        limitations.append("Endpoint discovery telemetry is grouped under Reconnaissance; it may not represent external network scanning.")
     quality = {"maturity": maturity, "maturity_label": maturity_label, "completeness_pct": completeness,
                "path_status": path.get("status") or "partial", "linked_event_count": len(event_details),
                "field_checks": field_checks, "observed_fields": observed, "missing_fields": missing,
@@ -324,7 +332,15 @@ def attack_detail(finding: dict, events: list[dict]) -> dict:
                     "confidence": float(finding.get("confidence") or 0), "status": finding.get("status") or "open",
                     "created_time": finding.get("created_time"), "recommendation": finding.get("recommendation") or "",
                     "analysis_status": finding.get("analysis_status"), "detection_rule": finding.get("detection_rule"),
-                    "detection_source": finding.get("detection_source"), "updated_time": finding.get("updated_time")},
+                    "detection_source": finding.get("detection_source"), "updated_time": finding.get("updated_time"),
+                    "attack_family": effective_family, "attack_subtype": effective_subtype,
+                    "taxonomy_version": effective_taxonomy_version,
+                    "subtype_origin": subtype_origin,
+                    "classification_method": finding.get("classification_method") or "historical_taxonomy_inference",
+                    "evidence_quality": finding.get("evidence_quality") or "historical_record",
+                    "attribution_status": finding.get("attribution_status"),
+                    "ai_verdict": finding.get("ai_verdict"),
+                    "ai_reasoning_mode": finding.get("ai_reasoning_mode")},
         "attack": {"sources": unique_sources, "source_ips": unique_src, "source_identities": unique_identities,
                    "destinations": unique_dst, "destination_ips": unique_dst_ips, "actors": unique_actors, "affected_users": unique_affected,
                    "users": unique_users, "event_types": _unique(event_types), "actions": _unique(actions),

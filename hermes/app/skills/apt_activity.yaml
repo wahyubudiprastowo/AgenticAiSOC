@@ -1,8 +1,10 @@
 skill: apt_activity
 category: apt_activity
-description: Reachable via REAL reclassification in hermes/app/worker.py after IOC enrichment finds APT/threat-actor attribution.
+description: Handles explicit threat-intelligence events carrying provider-reported actor attribution.
 match:
   event_types: [security_alert]
+  sources: [threat_intel]
+  require_source: true
   keywords: ["apt", "advanced persistent threat", "nation-state", "nation state", "threat actor", "lazarus", "fancy bear", "cozy bear"]
 priority: 10
 mitre_technique: ["T1071", "T1105"]

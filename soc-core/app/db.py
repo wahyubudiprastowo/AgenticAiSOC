@@ -1,5 +1,5 @@
 from __future__ import annotations
-import ipaddress, json, os, logging
+import ipaddress, json, os, logging, threading
 from contextlib import contextmanager
 from typing import Optional
 import psycopg2, psycopg2.extras
@@ -7,18 +7,59 @@ from psycopg2 import pool
 logger = logging.getLogger("soc-core.db")
 DATABASE_URL = os.getenv("DATABASE_URL", "postgresql://soc_admin:change_this_password@postgres:5432/agentic_soc")
 _pool: Optional[pool.SimpleConnectionPool] = None
-def init_pool(minconn=1, maxconn=10):
-    global _pool
+_pool_slots: Optional[threading.BoundedSemaphore] = None
+
+# Lists intentionally exclude the large normalized event and complete AI payload.
+# Full evidence remains available through get_finding()/the detail endpoint.
+_FINDING_LIST_COLUMNS = """
+    id, event_ids, primary_event_id, category, threat_classification,
+    mitre_technique, confidence, severity, recommendation, status,
+    created_time, analysis_status, detection_rule, detection_source,
+    updated_time, attack_family, attack_subtype, taxonomy_version,
+    classification_method, detection_rule_version, evidence_quality,
+    attribution_status, ai_verdict, ai_reasoning_mode,
+    jsonb_build_object(
+        'threat_summary', coalesce(ai_result->'threat_summary', '{}'::jsonb)
+    ) AS ai_result,
+    jsonb_build_object(
+        'evidence', coalesce(evidence->'evidence', '[]'::jsonb),
+        'event', jsonb_build_object(
+            'is_synthetic_test', coalesce(evidence #>> '{event,is_synthetic_test}', 'false') = 'true'
+        )
+    ) AS evidence,
+    (coalesce(evidence #>> '{event,is_synthetic_test}', 'false') = 'true') AS is_synthetic_test
+"""
+
+_EVENT_LIST_COLUMNS = """
+    id, external_id, source, type, severity, src_ip, dst_ip, user_name,
+    description, mitre_technique, is_filtered_in, created_at
+"""
+def init_pool(minconn: int | None = None, maxconn: int | None = None):
+    global _pool, _pool_slots
     if _pool is None:
+        minconn = minconn if minconn is not None else int(os.getenv("SOC_DB_POOL_MIN", "2"))
+        maxconn = maxconn if maxconn is not None else int(os.getenv("SOC_DB_POOL_MAX", "16"))
+        if minconn < 1 or maxconn < minconn:
+            raise ValueError("SOC DB pool requires 1 <= min <= max")
         _pool = psycopg2.pool.ThreadedConnectionPool(minconn, maxconn, dsn=DATABASE_URL)
+        _pool_slots = threading.BoundedSemaphore(maxconn)
         _ensure_finding_schema()
 @contextmanager
 def get_conn():
     if _pool is None: init_pool()
-    conn = _pool.getconn()
-    try: yield conn; conn.commit()
-    except Exception: conn.rollback(); raise
-    finally: _pool.putconn(conn)
+    if _pool_slots is None or not _pool_slots.acquire(timeout=float(os.getenv("SOC_DB_POOL_WAIT_SECONDS", "20"))):
+        raise TimeoutError("timed out waiting for a SOC database connection")
+    conn = None
+    try:
+        conn = _pool.getconn()
+        yield conn
+        conn.commit()
+    except Exception:
+        if conn is not None: conn.rollback()
+        raise
+    finally:
+        if conn is not None: _pool.putconn(conn)
+        _pool_slots.release()
 def _ensure_finding_schema() -> None:
     with get_conn() as conn:
         with conn.cursor() as cur:
@@ -27,6 +68,16 @@ def _ensure_finding_schema() -> None:
             cur.execute("ALTER TABLE findings ADD COLUMN IF NOT EXISTS detection_rule TEXT")
             cur.execute("ALTER TABLE findings ADD COLUMN IF NOT EXISTS detection_source TEXT")
             cur.execute("ALTER TABLE findings ADD COLUMN IF NOT EXISTS updated_time TIMESTAMPTZ")
+            cur.execute("ALTER TABLE findings ADD COLUMN IF NOT EXISTS attack_family TEXT")
+            cur.execute("ALTER TABLE findings ADD COLUMN IF NOT EXISTS attack_subtype TEXT")
+            cur.execute("ALTER TABLE findings ADD COLUMN IF NOT EXISTS taxonomy_version TEXT")
+            cur.execute("ALTER TABLE findings ADD COLUMN IF NOT EXISTS classification_method TEXT")
+            cur.execute("ALTER TABLE findings ADD COLUMN IF NOT EXISTS detection_rule_version INTEGER")
+            cur.execute("ALTER TABLE findings ADD COLUMN IF NOT EXISTS evidence_quality TEXT")
+            cur.execute("ALTER TABLE findings ADD COLUMN IF NOT EXISTS attribution_status TEXT NOT NULL DEFAULT 'none'")
+            cur.execute("ALTER TABLE findings ADD COLUMN IF NOT EXISTS ai_verdict TEXT")
+            cur.execute("ALTER TABLE findings ADD COLUMN IF NOT EXISTS ai_reasoning_mode TEXT")
+            cur.execute("CREATE INDEX IF NOT EXISTS idx_findings_subtype ON findings (attack_subtype)")
             cur.execute("CREATE UNIQUE INDEX IF NOT EXISTS uq_findings_primary_event ON findings (primary_event_id) WHERE primary_event_id IS NOT NULL")
             cur.execute("""CREATE TABLE IF NOT EXISTS finding_indicators (
                 id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -119,7 +170,7 @@ def list_events(limit=100, severity=None, since_minutes=None) -> list[dict]:
             if since_minutes: conditions.append("created_at >= now() - (%s || ' minutes')::interval"); params.append(str(since_minutes))
             where = f"WHERE {' AND '.join(conditions)}" if conditions else ""
             params.append(limit)
-            cur.execute(f"SELECT * FROM events {where} ORDER BY created_at DESC LIMIT %s", params)
+            cur.execute(f"SELECT {_EVENT_LIST_COLUMNS} FROM events {where} ORDER BY created_at DESC LIMIT %s", params)
             return [dict(r) for r in cur.fetchall()]
 def get_event(event_id: str) -> Optional[dict]:
     with get_conn() as conn:
@@ -136,6 +187,8 @@ def insert_deterministic_finding(event_id: str, event: dict, detection: dict, io
     evidence = {"finding": event.get("description") or event.get("type"),
         "evidence": [f"{detection['rule_id']}: normalized event type '{event.get('type')}' matched deterministic detection"],
         "context": event.get("destination") or event.get("source"), "category_hint": detection["category"],
+        "subtype_hint": detection["attack_subtype"], "taxonomy_version": detection["taxonomy_version"],
+        "deterministic_detection": detection,
         "indicators": indicators,
         "skill": None, "event": {"source": event.get("source"), "type": event.get("type"),
             "severity": event.get("severity"), "action": event.get("action"),
@@ -149,13 +202,19 @@ def insert_deterministic_finding(event_id: str, event: dict, detection: dict, io
         with conn.cursor() as cur:
             cur.execute("""INSERT INTO findings (event_ids, primary_event_id, category, threat_classification,
                     mitre_technique, confidence, severity, evidence, ai_result, recommendation,
-                    analysis_status, detection_rule, detection_source, updated_time)
+                    analysis_status, detection_rule, detection_source, updated_time,
+                    attack_family, attack_subtype, taxonomy_version, classification_method,
+                    detection_rule_version, evidence_quality, attribution_status, ai_verdict, ai_reasoning_mode)
                 VALUES (ARRAY[%s::uuid], %s::uuid, %s, %s, %s, %s, %s, %s, %s, %s,
-                    'pending_ai', %s, 'soc_core', now())
+                    'pending_ai', %s, 'soc_core', now(), %s, %s, %s, %s, %s, %s, %s, NULL, NULL)
                 ON CONFLICT (primary_event_id) WHERE primary_event_id IS NOT NULL DO NOTHING RETURNING id""",
                 (event_id, event_id, detection["category"], detection["classification"],
-                 event.get("mitre_technique") or [], detection["confidence"], event.get("severity", "low"),
-                 json.dumps(evidence), json.dumps(ai_result), detection["recommendation"], detection["rule_id"]))
+                 detection.get("mitre_technique") or event.get("mitre_technique") or [], detection["confidence"],
+                 event.get("severity", "low"), json.dumps(evidence), json.dumps(ai_result),
+                 detection["recommendation"], detection["rule_id"], detection.get("attack_family"),
+                 detection.get("attack_subtype"), detection.get("taxonomy_version"),
+                 detection.get("classification_method"), detection.get("rule_version"),
+                 detection.get("evidence_quality"), detection.get("attribution_status", "none")))
             row = cur.fetchone()
             if row: return str(row[0])
             cur.execute("SELECT id FROM findings WHERE primary_event_id=%s::uuid", (event_id,))
@@ -195,7 +254,7 @@ def _attach_indicators(cur, finding: dict | None) -> dict | None:
 def list_findings(limit=50) -> list[dict]:
     with get_conn() as conn:
         with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
-            cur.execute("SELECT * FROM findings ORDER BY created_time DESC LIMIT %s", (limit,))
+            cur.execute(f"SELECT {_FINDING_LIST_COLUMNS} FROM findings ORDER BY created_time DESC LIMIT %s", (limit,))
             return [_finding_dict(row) for row in cur.fetchall()]
 def get_finding(finding_id: str) -> Optional[dict]:
     with get_conn() as conn:
@@ -207,10 +266,12 @@ def get_finding_by_event_id(event_id: str) -> Optional[dict]:
         with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
             cur.execute("SELECT * FROM findings WHERE %s::uuid=ANY(event_ids) ORDER BY created_time DESC LIMIT 1", (event_id,))
             row = cur.fetchone(); return _attach_indicators(cur, row)
-def findings_since(minutes=1440) -> list[dict]:
+def findings_since(minutes=1440, limit=200) -> list[dict]:
     with get_conn() as conn:
         with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
-            cur.execute("SELECT * FROM findings WHERE created_time >= now()-(%s || ' minutes')::interval ORDER BY created_time DESC", (str(minutes),))
+            cur.execute(f"""SELECT {_FINDING_LIST_COLUMNS} FROM findings
+                        WHERE created_time >= now()-(%s || ' minutes')::interval
+                        ORDER BY created_time DESC LIMIT %s""", (str(minutes), limit))
             return [_finding_dict(row) for row in cur.fetchall()]
 def _finding_filters(start_time=None, end_time=None, severity=None, category=None, query=None) -> tuple[str, list]:
     conditions, params = [], []
@@ -228,7 +289,8 @@ def search_findings(start_time=None, end_time=None, limit=100, offset=0, severit
     with get_conn() as conn:
         with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
             cur.execute(f"SELECT count(*) AS total FROM findings {where}", params); total = int(cur.fetchone()["total"])
-            cur.execute(f"SELECT * FROM findings {where} ORDER BY created_time DESC LIMIT %s OFFSET %s", [*params, limit, offset])
+            cur.execute(f"SELECT {_FINDING_LIST_COLUMNS} FROM findings {where} ORDER BY created_time DESC LIMIT %s OFFSET %s",
+                        [*params, limit, offset])
             return [_finding_dict(row) for row in cur.fetchall()], total
 def findings_analytics(start_time=None, end_time=None, bucket="hour", severity=None, category=None, query=None) -> dict:
     bucket_sql = {"hour": "hour", "day": "day", "week": "week", "month": "month", "year": "year"}[bucket]
@@ -303,7 +365,8 @@ def overview(start_time=None, end_time=None, bucket="hour", severity=None, categ
             severities = [{"severity": row["severity"] or "unknown", "total": int(row["total"])} for row in cur.fetchall()]
             cur.execute(f"SELECT e.source, count(*) AS total FROM events e {where} GROUP BY e.source ORDER BY total DESC", params)
             sources = [{"source": row["source"] or "unknown", "total": int(row["total"])} for row in cur.fetchall()]
-            cur.execute(f"SELECT e.* FROM events e {where} ORDER BY e.created_at DESC LIMIT %s", [*params, limit])
+            cur.execute(f"SELECT {_EVENT_LIST_COLUMNS} FROM events e {where} ORDER BY e.created_at DESC LIMIT %s",
+                        [*params, limit])
             events = [dict(row) for row in cur.fetchall()]
     total_events = int(stats_row["total_events"])
     filtered_in = int(stats_row["filtered_in_events"])

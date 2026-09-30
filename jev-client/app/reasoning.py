@@ -1,67 +1,106 @@
 from __future__ import annotations
-import json, logging, os, re, threading, time
+
+import json
+import logging
+import os
+import re
+import threading
+import time
 from pathlib import Path
+
+from pydantic import ValidationError
+
+from shared.taxonomy import (
+    category_ids,
+    normalize_subtype,
+    subtype_display,
+    subtype_mitre,
+    taxonomy_version,
+    valid_mitre,
+)
+from .schemas import AIAnalysis, AnalyzeRequest
+
+
 logger = logging.getLogger("jev-client.reasoning")
 AI_PROVIDER_BASE_URL = os.getenv("AI_PROVIDER_BASE_URL", os.getenv("AI_BASE_URL", "http://jev:20128"))
-AI_MODEL = os.getenv("AI_MODEL", "cgpt-web/gpt-5.6-sol-high"); AI_API_KEY = os.getenv("AI_API_KEY", "")
-AI_MAX_TOKENS = int(os.getenv("AI_MAX_TOKENS", "4096")); AI_TIMEOUT = int(os.getenv("AI_TIMEOUT_SECONDS", os.getenv("AI_TIMEOUT", "180")))
+AI_MODEL = os.getenv("AI_MODEL", "cgpt-web/gpt-5.6-sol-high")
+AI_API_KEY = os.getenv("AI_API_KEY", "")
+AI_MAX_TOKENS = int(os.getenv("AI_MAX_TOKENS", "4096"))
+JEV_UPSTREAM_TIMEOUT = max(2.0, float(os.getenv("JEV_UPSTREAM_TIMEOUT_SECONDS", "12")))
+JEV_FAILURE_BACKOFF = max(5.0, float(os.getenv("JEV_FAILURE_BACKOFF_SECONDS", "60")))
 JEV_FALLBACK_MODE = os.getenv("JEV_FALLBACK_MODE", "auto")
 _PROMPT_PATH = Path(os.getenv("JEV_SYSTEM_PROMPT_PATH", "/app/prompts/jev_system_prompt.txt"))
-def _load_system_prompt():
-    if _PROMPT_PATH.exists(): return _PROMPT_PATH.read_text(encoding="utf-8")
-    return "You are a senior SOC analyst."
-SYSTEM_PROMPT = _load_system_prompt()
-_MITRE_BY_CATEGORY = {"credential_attack": ["T1110"], "malware": ["T1105", "T1204"], "phishing": ["T1566"],
-    "ransomware": ["T1486"], "suspicious_network": ["T1046"], "reconnaissance": ["T1595"], "vulnerability_management": ["T1190"],
-    "file_integrity": [], "supply_chain": ["T1195", "T1195.002"], "ddos": ["T1498", "T1499"], "sql_injection": ["T1190"],
-    "insider_threat": ["T1078", "T1005"], "data_exfiltration": ["T1041", "T1567"], "apt_activity": ["T1071", "T1105"],
-    "zero_day": ["T1190", "T1203"], "cloud_native": ["T1526", "T1580"], "container_kubernetes": ["T1610", "T1613"]}
-_CLASSIFICATION_BY_CATEGORY = {"credential_attack": "Credential Attack", "malware": "Malware", "phishing": "Phishing",
-    "ransomware": "Ransomware", "suspicious_network": "Suspicious Network Activity", "reconnaissance": "Reconnaissance",
-    "vulnerability_management": "Vulnerability", "file_integrity": "File Integrity", "supply_chain": "Supply Chain Compromise",
-    "ddos": "Denial of Service (DDoS)", "sql_injection": "SQL Injection", "insider_threat": "Insider Threat",
-    "data_exfiltration": "Data Exfiltration", "apt_activity": "APT Activity", "zero_day": "Zero-Day Exploitation",
-    "cloud_native": "Cloud-Native Attack", "container_kubernetes": "Container/Kubernetes Threat"}
-REQUIRED_KEYS = {"threat_classification", "mitre_technique", "confidence", "investigation_recommendation", "severity", "based_on"}
 _RUNTIME_LOCK = threading.Lock()
-_RUNTIME = {"mode": "untested", "last_checked": None, "last_error": None}
+_RUNTIME = {"mode": "untested", "last_checked": None, "last_error": None,
+            "schema_version": 2, "taxonomy_version": taxonomy_version()}
+_BACKOFF_UNTIL = 0.0
+
+
+def _load_system_prompt() -> str:
+    if _PROMPT_PATH.exists(): return _PROMPT_PATH.read_text(encoding="utf-8")
+    return "Analyze only cited evidence and return the required JSON schema."
+
+
+SYSTEM_PROMPT = _load_system_prompt()
+
+
 def runtime_status() -> dict:
     with _RUNTIME_LOCK: return dict(_RUNTIME)
+
+
 def _record_runtime(mode: str, error: str | None = None) -> None:
     with _RUNTIME_LOCK:
         _RUNTIME.update({"mode": mode, "last_checked": time.time(), "last_error": error})
-def _mock_reasoning(evidence: dict) -> dict:
-    finding_text = (evidence.get("finding") or "").lower(); all_text = finding_text + " " + " ".join(evidence.get("evidence", [])).lower()
-    evidence_ids = [e.split(":")[0].strip() if ":" in e else e for e in evidence.get("evidence", [])]
-    category_hint = evidence.get("category_hint")
-    category = category_hint if category_hint in _CLASSIFICATION_BY_CATEGORY else None
-    if "apt-attribution" in all_text or any(k in all_text for k in ("apt", "lazarus", "fancy bear", "cozy bear")): category = "apt_activity"
-    elif category is None and any(k in finding_text for k in ("login", "password", "brute", "credential")): category = "credential_attack"
-    elif category is None and "ransom" in finding_text: category = "ransomware"
-    elif category is None and ("phish" in finding_text or "inbox rule" in finding_text): category = "phishing"
-    elif category is None and ("zero-day" in finding_text or "unpatched" in finding_text): category = "zero_day"
-    elif category is None and ("sql injection" in finding_text or "web attack" in finding_text): category = "sql_injection"
-    elif category is None and ("ddos" in finding_text or "denial of service" in finding_text): category = "ddos"
-    elif category is None and ("node_modules" in finding_text or "site-packages" in finding_text): category = "supply_chain"
-    elif category is None and ("dlprulematch" in all_text or "exfiltrat" in finding_text): category = "data_exfiltration"
-    elif category is None and any(k in finding_text for k in ("anonymouslinkcreated", "bulk download", "removable media")): category = "insider_threat"
-    elif category is None and any(k in finding_text for k in ("malware", "virus", "trojan")): category = "malware"
-    elif category is None and "scan" in finding_text: category = "reconnaissance"
-    elif category is None and "cve" in finding_text: category = "vulnerability_management"
-    elif category is None and "fim:" in finding_text: category = "file_integrity"
-    malicious_ioc = "malicious" in all_text and "not flagged" not in all_text
-    many_failures = any(re.search(r"\b(\d{2,})\b.*fail", e, re.IGNORECASE) for e in evidence.get("evidence", []))
-    confidence = 0.55
-    if malicious_ioc: confidence += 0.25
-    if many_failures: confidence += 0.15
-    if category == "apt_activity": confidence += 0.10
-    confidence = min(confidence, 0.97)
-    if not evidence.get("evidence"):
-        return {"threat_classification": "Unknown", "mitre_technique": [], "confidence": 0.0, "investigation_recommendation": "No evidence provided.", "severity": "low", "based_on": []}
-    severity = "critical" if confidence > 0.9 else "high" if confidence > 0.7 else "medium"
-    if category in ("data_exfiltration", "supply_chain", "zero_day", "apt_activity"): severity = "critical" if confidence > 0.6 else severity
-    return {"threat_classification": _CLASSIFICATION_BY_CATEGORY.get(category, "Unknown"), "mitre_technique": _MITRE_BY_CATEGORY.get(category, []),
-            "confidence": round(confidence, 2), "investigation_recommendation": "Investigate account/asset for possible compromise.", "severity": severity, "based_on": evidence_ids}
+
+
+def _evidence_ids(request: AnalyzeRequest) -> set[str]:
+    ids = {item.id for item in request.evidence_items}
+    for line in request.evidence:
+        prefix = line.split(":", 1)[0].strip()
+        if prefix: ids.add(prefix)
+    return ids
+
+
+def _validate_analysis(value: object, request: AnalyzeRequest) -> dict:
+    try:
+        analysis = AIAnalysis.model_validate(value)
+    except ValidationError as exc:
+        raise ValueError(f"invalid AI response schema: {exc.errors(include_url=False)}") from exc
+    if analysis.proposed_category and analysis.proposed_category not in category_ids():
+        raise ValueError(f"unknown proposed_category: {analysis.proposed_category}")
+    if analysis.proposed_category and analysis.proposed_subtype:
+        normalized = normalize_subtype(analysis.proposed_category, analysis.proposed_subtype)
+        if normalized != analysis.proposed_subtype:
+            raise ValueError(f"unknown proposed_subtype: {analysis.proposed_category}.{analysis.proposed_subtype}")
+    if valid_mitre(analysis.mitre_technique) != sorted(set(analysis.mitre_technique)):
+        raise ValueError("mitre_technique contains an invalid or duplicate ATT&CK ID")
+    unknown_refs = set(analysis.based_on) - _evidence_ids(request)
+    if unknown_refs:
+        raise ValueError(f"based_on references evidence that was not supplied: {sorted(unknown_refs)}")
+    if analysis.verdict in {"supported", "contradicted"} and not analysis.based_on:
+        raise ValueError(f"verdict {analysis.verdict} requires at least one evidence reference")
+    return analysis.model_dump()
+
+
+def _local_reasoning(request: AnalyzeRequest) -> dict:
+    category = request.category_hint if request.category_hint in category_ids() else None
+    subtype = normalize_subtype(category, request.subtype_hint) if category else None
+    evidence_ids = sorted(_evidence_ids(request))
+    if not category or not evidence_ids:
+        return AIAnalysis(verdict="insufficient", threat_classification="Unknown",
+            proposed_category=None, proposed_subtype=None, mitre_technique=[], confidence=0.0,
+            investigation_recommendation="Review the source event because the deterministic evidence is incomplete.",
+            severity="low", based_on=[], reasoning="No valid category hint or citable evidence was supplied.").model_dump()
+    event = request.event
+    severity = event.severity if event and event.severity in {"low", "medium", "high", "critical"} else "medium"
+    mitre = valid_mitre([*(event.mitre_technique if event else []), *subtype_mitre(category, subtype)])
+    return AIAnalysis(verdict="supported", threat_classification=subtype_display(category, subtype),
+        proposed_category=category, proposed_subtype=subtype, mitre_technique=mitre, confidence=0.65,
+        investigation_recommendation="Validate the affected identity or asset using the cited source evidence.",
+        severity=severity, based_on=evidence_ids[:8],
+        reasoning="Local deterministic fallback retained the supplied taxonomy classification; it did not infer new facts.").model_dump()
+
+
 def _extract_json_from_text(text: str):
     try: return json.loads(text)
     except json.JSONDecodeError: pass
@@ -70,40 +109,68 @@ def _extract_json_from_text(text: str):
         try: return json.loads(match.group(0))
         except json.JSONDecodeError: return None
     return None
-def _validate_schema(result) -> bool: return isinstance(result, dict) and REQUIRED_KEYS.issubset(result.keys())
-def _call_remote_jev(evidence: dict) -> dict:
+
+
+def _call_remote_jev(request: AnalyzeRequest) -> dict:
     import httpx
+
     headers = {"Content-Type": "application/json"}
     if AI_API_KEY: headers["Authorization"] = f"Bearer {AI_API_KEY}"
-    payload = {"model": AI_MODEL, "max_tokens": AI_MAX_TOKENS, "messages": [{"role": "system", "content": SYSTEM_PROMPT}, {"role": "user", "content": json.dumps(evidence)}]}
-    base = AI_PROVIDER_BASE_URL.rstrip("/")
-    errors = []
-    for url in [f"{base}/chat/completions", base]:
-        try:
-            with httpx.Client(timeout=AI_TIMEOUT) as client:
-                resp = client.post(url, json=payload, headers=headers); resp.raise_for_status(); data = resp.json()
-            content = data["choices"][0]["message"]["content"] if isinstance(data, dict) and "choices" in data else \
-                      data.get("content") if isinstance(data, dict) and "content" in data else \
-                      data.get("response") if isinstance(data, dict) and "response" in data else json.dumps(data)
-            parsed = _extract_json_from_text(content) if isinstance(content, str) else content
-            if parsed and _validate_schema(parsed): return parsed
-            errors.append("invalid response schema")
-        except httpx.HTTPStatusError as exc:
-            message = ""
-            try: message = str((exc.response.json().get("error") or {}).get("message") or "")
-            except Exception: pass
-            errors.append(f"HTTP {exc.response.status_code}" + (f": {message[:160]}" if message else ""))
-        except Exception as exc: errors.append(type(exc).__name__)
-    raise RuntimeError("; ".join(errors) or "all upstream endpoint candidates failed")
-def analyze(evidence: dict) -> dict:
-    if JEV_FALLBACK_MODE == "force_mock":
-        result = _mock_reasoning(evidence); result["reasoning_mode"] = "fallback"
-        _record_runtime("fallback", "forced by JEV_FALLBACK_MODE"); return result
+    evidence_payload = request.model_dump(mode="json")
+    evidence_payload["contract"] = {"schema_version": 2, "taxonomy_version": taxonomy_version(),
+        "allowed_categories": sorted(category_ids())}
+    payload = {"model": AI_MODEL, "max_tokens": AI_MAX_TOKENS,
+        "messages": [{"role": "system", "content": SYSTEM_PROMPT},
+                     {"role": "user", "content": json.dumps(evidence_payload)}]}
+    url = f"{AI_PROVIDER_BASE_URL.rstrip('/')}/chat/completions"
     try:
-        result = _call_remote_jev(evidence); result["reasoning_mode"] = "remote"
-        _record_runtime("remote"); return result
+        with httpx.Client(timeout=JEV_UPSTREAM_TIMEOUT) as client:
+            response = client.post(url, json=payload, headers=headers)
+            response.raise_for_status()
+            data = response.json()
+        content = (data["choices"][0]["message"]["content"] if isinstance(data, dict) and "choices" in data else
+                   data.get("content") if isinstance(data, dict) and "content" in data else
+                   data.get("response") if isinstance(data, dict) and "response" in data else json.dumps(data))
+        parsed = _extract_json_from_text(content) if isinstance(content, str) else content
+        if parsed is None:
+            raise ValueError("response did not contain a JSON object")
+        return _validate_analysis(parsed, request)
+    except httpx.HTTPStatusError as exc:
+        message = ""
+        try:
+            message = str((exc.response.json().get("error") or {}).get("message") or "")
+        except Exception:
+            pass
+        raise RuntimeError(
+            f"upstream HTTP {exc.response.status_code}" + (f": {message[:160]}" if message else "")
+        ) from exc
+
+
+def analyze(evidence: dict | AnalyzeRequest) -> dict:
+    global _BACKOFF_UNTIL
+    request = evidence if isinstance(evidence, AnalyzeRequest) else AnalyzeRequest.model_validate(evidence)
+    if JEV_FALLBACK_MODE == "force_mock":
+        result = _local_reasoning(request)
+        result["reasoning_mode"] = "fallback"
+        _record_runtime("fallback", "forced by JEV_FALLBACK_MODE")
+        return result
+    try:
+        remaining = _BACKOFF_UNTIL - time.monotonic()
+        if remaining > 0:
+            raise RuntimeError(f"upstream circuit open for {remaining:.1f}s after the previous failure")
+        result = _call_remote_jev(request)
+        _BACKOFF_UNTIL = 0.0
+        result["reasoning_mode"] = "remote"
+        _record_runtime("remote")
+        return result
     except Exception as exc:
-        _record_runtime("unavailable" if JEV_FALLBACK_MODE == "force_remote" else "fallback", str(exc)[:300])
+        error = str(exc)[:300]
+        _BACKOFF_UNTIL = time.monotonic() + JEV_FAILURE_BACKOFF
+        _record_runtime("unavailable" if JEV_FALLBACK_MODE == "force_remote" else "fallback", error)
         if JEV_FALLBACK_MODE == "force_remote": raise
-        result = _mock_reasoning(evidence); result["reasoning_mode"] = "fallback"
-        result["fallback_reason"] = str(exc)[:300]; return result
+        result = _local_reasoning(request)
+        result["verdict"] = "unavailable"
+        result["confidence"] = 0.0
+        result["reasoning_mode"] = "fallback"
+        result["fallback_reason"] = error
+        return result

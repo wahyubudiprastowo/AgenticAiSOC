@@ -1,6 +1,6 @@
 # Agentic AI SOC Platform — Coordination Audit Report (v4)
 
-**Status:** 75 PASS / 0 WARN / 0 FAIL
+**Status:** 77 PASS / 0 WARN / 0 FAIL
 **Verify anytime:** `python3 scripts/audit_verify.py`
 
 ## Summary
@@ -27,6 +27,18 @@
 - Runtime truthfulness: Settings now separates configured, live, partial,
   stale-cache, and unavailable intelligence integrations. Upstream HTTP/auth/rate
   failures no longer appear as healthy provider results.
+- Accuracy phase 1: one versioned registry now controls 17 stable categories and
+  their subtypes across SOC Core, Hermes, Jev, dashboard, and audit validation.
+  Endpoint Discovery, web-exploit subtypes, and identity-attack subtypes are no
+  longer collapsed into one display label.
+- Authority boundary: deterministic evidence owns category/subtype/confidence/
+  severity. Jev produces an advisory verdict and cannot overwrite those fields.
+  A repair restored 4,594 rows whose confidence had temporarily been set to zero
+  by the old fallback path; the post-repair count is zero affected rows.
+- Data visibility: All Time list responses are compact, full evidence loads from
+  the detail endpoint, and PostgreSQL access now waits for an available pool slot.
+  An 18-request parallel dashboard test returned 18 HTTP 200 responses with zero
+  pool-exhaustion errors. No event or finding row was deleted.
 
 ## Port Collision Matrix — Verified
 | Port | Service | Collides? |
@@ -61,12 +73,13 @@ wazuh-mcp-dashboard (8088), wazuh-infokom-mcp (8000), 9router (20129).
    background pollers.
 
 ## v3 additions (9 new categories, 17 total)
-All 9 new skills use `priority: 10` for specificity tie-breaking. APT
-Activity uses genuine post-enrichment reclassification (not just
-keywords). Cloud-Native/Container-K8s honestly labeled manual-ingest-only.
+All 9 new skills use `priority: 10` for specificity tie-breaking. Threat-actor
+reporting is now stored as an attribution dimension and never reclassifies a
+different observed attack into the Threat Actor Attribution category. Cloud-Native/Container-K8s remain
+honestly labeled manual-ingest-only.
 
 ## Re-verify anytime
 ```bash
 python3 scripts/audit_verify.py
 ```
-Expected: `SUMMARY: 75 PASS, 0 WARN, 0 FAIL`.
+Expected: `SUMMARY: 77 PASS, 0 WARN, 0 FAIL`.

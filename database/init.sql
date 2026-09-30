@@ -25,11 +25,16 @@ CREATE TABLE IF NOT EXISTS findings (
     severity TEXT, evidence JSONB NOT NULL, ai_result JSONB NOT NULL, recommendation TEXT,
     status TEXT NOT NULL DEFAULT 'open', created_time TIMESTAMPTZ NOT NULL DEFAULT now(),
     primary_event_id UUID, analysis_status TEXT NOT NULL DEFAULT 'complete',
-    detection_rule TEXT, detection_source TEXT, updated_time TIMESTAMPTZ
+    detection_rule TEXT, detection_source TEXT, updated_time TIMESTAMPTZ,
+    attack_family TEXT, attack_subtype TEXT, taxonomy_version TEXT,
+    classification_method TEXT, detection_rule_version INTEGER,
+    evidence_quality TEXT, attribution_status TEXT NOT NULL DEFAULT 'none',
+    ai_verdict TEXT, ai_reasoning_mode TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_findings_category ON findings (category);
 CREATE INDEX IF NOT EXISTS idx_findings_severity ON findings (severity);
 CREATE INDEX IF NOT EXISTS idx_findings_created ON findings (created_time DESC);
+CREATE INDEX IF NOT EXISTS idx_findings_subtype ON findings (attack_subtype);
 CREATE UNIQUE INDEX IF NOT EXISTS uq_findings_primary_event ON findings (primary_event_id) WHERE primary_event_id IS NOT NULL;
 CREATE TABLE IF NOT EXISTS finding_indicators (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(), finding_id UUID NOT NULL REFERENCES findings(id) ON DELETE CASCADE,

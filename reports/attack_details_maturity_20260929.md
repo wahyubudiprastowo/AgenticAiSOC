@@ -1,11 +1,12 @@
-# Attack Details maturity audit — 2026-09-29
+# Attack Details maturity audit — updated 2026-09-30
 
 ## Scope and method
 
 This audit checked all 17 taxonomy categories against the live PostgreSQL data,
 the `/api/findings/{id}` source-linked detail endpoint, and the rendered browser
-UI. Counts below are point-in-time counts. Synthetic rows are identified only by
-the explicit `[COVERAGE_TEST]` marker; existing records were not modified.
+UI. Counts below are a 2026-09-30 08:19 UTC snapshot and continue increasing.
+Synthetic provenance is resolved from the linked source event as well as its
+explicit coverage marker; existing records were not deleted or rewritten.
 
 The normalized pipeline has one 100%-complete, explicitly synthetic validation
 finding for every testable category (16/16). Zero-Day remains intentionally not
@@ -16,22 +17,22 @@ rendering. It does not establish production sensor efficacy.
 
 | Category | Findings | Tagged synthetic | Non-test data | IOC-linked findings | Latest non-test evidence | Material gap |
 |---|---:|---:|---:|---:|---|---|
-| Malware | 16 | 5 | 11 | 2 (12.5%) | Source evidenced, 100% applicable fields | Low structured IOC coverage |
+| Malware | 19 | 5 | 14 | 5 | Source evidenced, 100% applicable fields | Low structured artifact/hash coverage |
 | Ransomware | 4 | 4 | 0 | 0 | Validation only | No production/source-sensor evidence |
-| Phishing | 67,497 | 4 | 67,493 | 5,902 (8.7%) | Source evidenced, 100% | Most historical rows have no persisted IOC result |
-| Credential Theft | 17,953 | 4 | 17,949 | 3 (<0.1%) | Source evidenced, 100% | IOC persistence is nearly absent; recommendation remains generic |
-| Network Intrusion | 1,491 | 4 | 1,487 | 1,334 (89.5%) | Source evidenced, 100% | Path is still based on individual events, not a correlated chain |
-| Reconnaissance | 2,364 | 4 | 2,360 | 79 (3.3%) | Partial, 71% | Latest WMI/System Discovery row has no source IP/action and may not be external scanning |
+| Phishing | 86,619 | 4 | 86,615 | 25,023 | Source evidenced, 100% | Most older rows predate structured IOC persistence |
+| Credential Theft | 23,703 | 4 | 23,699 | 3 | Source evidenced, 100% | Most login evidence has private IP/user context rather than an external IOC |
+| Network Intrusion | 2,882 | 4 | 2,878 | 2,725 | Source evidenced, 100% | Path is still based on individual events, not a correlated chain |
+| Reconnaissance | 2,780 | 4 | 2,776 | 160 | Partial, 71% | Endpoint Discovery often has destination context but no remote source/action |
 | Vulnerability | 189 | 4 | 185 | 2 (1.1%) | Source evidenced, contextual path, CVE present | Historical CVEs have not been reconciled with current NVD data |
 | File Integrity | 868 | 4 | 864 | 0 | Partial, 86% | Latest row has no acting user; local FIM context has no remote origin by design |
 | Supply Chain | 4 | 4 | 0 | 0 | Validation only | No production package/dependency evidence |
 | DDoS | 4 | 4 | 0 | 0 | Validation only | No production Fortigate DoS evidence |
-| SQL Injection | 5 | 5 | 0 | 0 | Validation only | No production WAF/IPS evidence |
-| Insider Threat | 360 | 4 | 356 | 27 (7.5%) | Source evidenced, 100% | Recommendations are generic; behavioral baseline is not shown |
+| Web Application Attack | 5 | 5 | 0 | 0 | Validation only | No production WAF/IPS evidence |
+| Insider Threat | 496 | 4 | 492 | 163 | Source evidenced, 100% | Behavioral baseline and incident aggregation are not shown |
 | Data Exfiltration | 4 | 4 | 0 | 0 | Validation only | No production Purview DLP evidence |
-| APT Activity | 4 | 4 | 0 | 0 | Validation only | No production attribution finding |
+| Threat Actor Attribution | 6 | 4 | 2 | 2 | Source evidenced, 100% | Provider attribution remains context, not campaign proof |
 | Zero-Day | 0 | 0 | 0 | 0 | Not testable automatically | Requires anomaly/process review; no guarantee is supportable |
-| Cloud-Native | 11 | 4 | 7 | 0 | Partial, 50% | Manual API ingestion; latest row lacks source, destination, action, and user |
+| Cloud-Native | 12 | 4 | 8 | 0 | Partial, 88% in latest audit | Manual API ingestion; no native AWS/Azure collector |
 | Container/Kubernetes | 5 | 4 | 1 | 0 | Partial, 50% | Manual API ingestion; no native audit collector |
 
 ## What the Attack Details page now states clearly
@@ -40,7 +41,11 @@ rendering. It does not establish production sensor efficacy.
   account, and destination IP. Vulnerability and FIM rows use contextual paths
   when an attacker origin is not expected.
 - Classification shows Attack type, Action, User, CVE, CVE status, Category,
-  Source system, normalized type, and detection rule.
+  Source system, normalized type, detection rule, attack family/subtype,
+  evidence quality, attribution status, and AI verdict/mode.
+- New findings display stored canonical subtypes. Legacy rows derive a
+  conservative subtype at read time and explicitly label it as a display-name
+  match or category default; the database row is not silently rewritten.
 - Evidence quality labels each applicable field as `observed`, `missing`, or
   `not applicable`, reports a completeness percentage, and distinguishes
   production telemetry from synthetic validation.
@@ -48,6 +53,9 @@ rendering. It does not establish production sensor efficacy.
   correlated multi-stage attack chain.
 - Direct links to a finding load the requested detail immediately while the
   heavier global overview queries continue in the background.
+- Global presets persist in the browser. Filters change only the query scope and
+  do not remove events/findings. Full evidence is fetched only for the opened
+  finding, keeping All Time lists responsive.
 
 The browser audit inspected production Vulnerability, Credential Theft,
 Phishing, and Network Intrusion findings. All required sections and fields were
@@ -90,9 +98,14 @@ that the affected endpoint has installed a fix.
 1. Backfill the 161 historical CVEs into `finding_indicators` with resumable NVD
    rate limiting and an audit trail.
 2. Replace generic recommendations with category- and evidence-specific actions.
-3. Add source-level tests for Ransomware, Supply Chain, DDoS, SQL Injection,
-   Data Exfiltration, and APT Activity, which currently have only synthetic data.
-4. Split endpoint discovery from external Reconnaissance in the taxonomy/UI.
-5. Add native CloudTrail/Azure and Kubernetes audit collectors.
-6. Build multi-event correlation before calling the displayed context an attack
+3. Add source-level tests for Ransomware, Supply Chain, DDoS, Web Application
+   Attack, Data Exfiltration, and Threat Actor Attribution, which currently
+   have only synthetic or unconfirmed production data.
+4. Add native CloudTrail/Azure and Kubernetes audit collectors.
+5. Build multi-event correlation before calling the displayed context an attack
    chain.
+
+The subtype split is complete: external scanning, network-service scanning, and
+endpoint/account/process/network/WMI Discovery remain under a stable parent but
+have distinct analyst-facing labels. Web and credential attack subtypes are also
+separated in the same registry.

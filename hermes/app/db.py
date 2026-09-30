@@ -35,23 +35,50 @@ def _ensure_finding_schema() -> None:
             cur.execute("ALTER TABLE findings ADD COLUMN IF NOT EXISTS detection_rule TEXT")
             cur.execute("ALTER TABLE findings ADD COLUMN IF NOT EXISTS detection_source TEXT")
             cur.execute("ALTER TABLE findings ADD COLUMN IF NOT EXISTS updated_time TIMESTAMPTZ")
+            cur.execute("ALTER TABLE findings ADD COLUMN IF NOT EXISTS attack_family TEXT")
+            cur.execute("ALTER TABLE findings ADD COLUMN IF NOT EXISTS attack_subtype TEXT")
+            cur.execute("ALTER TABLE findings ADD COLUMN IF NOT EXISTS taxonomy_version TEXT")
+            cur.execute("ALTER TABLE findings ADD COLUMN IF NOT EXISTS classification_method TEXT")
+            cur.execute("ALTER TABLE findings ADD COLUMN IF NOT EXISTS detection_rule_version INTEGER")
+            cur.execute("ALTER TABLE findings ADD COLUMN IF NOT EXISTS evidence_quality TEXT")
+            cur.execute("ALTER TABLE findings ADD COLUMN IF NOT EXISTS attribution_status TEXT NOT NULL DEFAULT 'none'")
+            cur.execute("ALTER TABLE findings ADD COLUMN IF NOT EXISTS ai_verdict TEXT")
+            cur.execute("ALTER TABLE findings ADD COLUMN IF NOT EXISTS ai_reasoning_mode TEXT")
             cur.execute("CREATE UNIQUE INDEX IF NOT EXISTS uq_findings_primary_event ON findings (primary_event_id) WHERE primary_event_id IS NOT NULL")
-def insert_finding(event_ids, category, threat_classification, mitre_technique, confidence, severity, evidence, ai_result, recommendation) -> str:
+            cur.execute("CREATE INDEX IF NOT EXISTS idx_findings_subtype ON findings (attack_subtype)")
+def insert_finding(event_ids, category, threat_classification, mitre_technique, confidence, severity, evidence, ai_result,
+                   recommendation, metadata) -> str:
     with get_conn() as conn:
         with conn.cursor() as cur:
             cur.execute("""INSERT INTO findings (event_ids, category, threat_classification, mitre_technique,
-                    confidence, severity, evidence, ai_result, recommendation) VALUES (%s::uuid[], %s, %s, %s, %s, %s, %s, %s, %s) RETURNING id;""",
-                (event_ids, category, threat_classification, mitre_technique, confidence, severity, json.dumps(evidence), json.dumps(ai_result), recommendation))
+                    confidence, severity, evidence, ai_result, recommendation, analysis_status,
+                    attack_family, attack_subtype, taxonomy_version, classification_method,
+                    detection_rule_version, evidence_quality, attribution_status, ai_verdict, ai_reasoning_mode)
+                VALUES (%s::uuid[], %s, %s, %s, %s, %s, %s, %s, %s, 'complete',
+                        %s, %s, %s, %s, %s, %s, %s, %s, %s) RETURNING id;""",
+                (event_ids, category, threat_classification, mitre_technique, confidence, severity,
+                 json.dumps(evidence), json.dumps(ai_result), recommendation,
+                 metadata.get("attack_family"), metadata.get("attack_subtype"), metadata.get("taxonomy_version"),
+                 metadata.get("classification_method"), metadata.get("detection_rule_version"),
+                 metadata.get("evidence_quality"), metadata.get("attribution_status", "none"),
+                 metadata.get("ai_verdict"), metadata.get("ai_reasoning_mode")))
             return str(cur.fetchone()[0])
 def enrich_finding(finding_id, category, threat_classification, mitre_technique, confidence, severity,
-                   evidence, ai_result, recommendation) -> bool:
+                   evidence, ai_result, recommendation, metadata) -> bool:
     with get_conn() as conn:
         with conn.cursor() as cur:
             cur.execute("""UPDATE findings SET category=%s, threat_classification=%s, mitre_technique=%s,
                     confidence=%s, severity=%s, evidence=%s, ai_result=%s, recommendation=%s,
-                    analysis_status='complete', updated_time=now() WHERE id=%s""",
+                    analysis_status='complete', updated_time=now(), attack_family=%s, attack_subtype=%s,
+                    taxonomy_version=%s, classification_method=%s, detection_rule_version=%s,
+                    evidence_quality=%s, attribution_status=%s, ai_verdict=%s, ai_reasoning_mode=%s
+                WHERE id=%s""",
                 (category, threat_classification, mitre_technique, confidence, severity,
-                 json.dumps(evidence), json.dumps(ai_result), recommendation, finding_id))
+                 json.dumps(evidence), json.dumps(ai_result), recommendation,
+                 metadata.get("attack_family"), metadata.get("attack_subtype"), metadata.get("taxonomy_version"),
+                 metadata.get("classification_method"), metadata.get("detection_rule_version"),
+                 metadata.get("evidence_quality"), metadata.get("attribution_status", "none"),
+                 metadata.get("ai_verdict"), metadata.get("ai_reasoning_mode"), finding_id))
             return cur.rowcount == 1
 def log_agent_run(agent_name, finding_id, input_payload, output_payload, duration_ms) -> None:
     with get_conn() as conn:

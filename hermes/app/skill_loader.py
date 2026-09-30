@@ -3,6 +3,7 @@ import logging, os
 from pathlib import Path
 from typing import Any, Optional
 import yaml
+from shared.taxonomy import category_ids, normalize_subtype, valid_mitre
 logger = logging.getLogger("hermes.skill_loader")
 SKILLS_DIR = Path(os.getenv("HERMES_SKILLS_DIR", str(Path(__file__).resolve().parent / "skills")))
 _skills_cache: Optional[list[dict]] = None
@@ -14,7 +15,20 @@ def load_skills(force_reload: bool = False) -> list[dict]:
     for path in sorted(SKILLS_DIR.glob("*.yaml")):
         try:
             with path.open("r", encoding="utf-8") as fh:
-                skill = yaml.safe_load(fh); skill["_file"] = path.name; skill.setdefault("priority", 0); skills.append(skill)
+                skill = yaml.safe_load(fh)
+                if not isinstance(skill, dict) or not skill.get("skill"):
+                    raise ValueError("skill file requires a mapping and skill id")
+                category = skill.get("category")
+                if category not in category_ids():
+                    raise ValueError(f"unknown taxonomy category: {category}")
+                if skill.get("attack_subtype"):
+                    normalized = normalize_subtype(category, skill["attack_subtype"])
+                    if normalized != skill["attack_subtype"]:
+                        raise ValueError(f"unknown taxonomy subtype: {category}.{skill['attack_subtype']}")
+                mitre = skill.get("mitre_technique") or []
+                if valid_mitre(mitre) != sorted(set(mitre)):
+                    raise ValueError(f"invalid or duplicate MITRE technique in {path.name}")
+                skill["_file"] = path.name; skill.setdefault("priority", 0); skills.append(skill)
         except Exception: logger.exception("Failed to load skill file %s", path)
     _skills_cache = skills
     logger.info("Loaded %d skills: %s", len(skills), [s.get("skill") for s in skills])

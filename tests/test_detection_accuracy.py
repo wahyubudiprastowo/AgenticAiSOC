@@ -134,7 +134,7 @@ class SkillRoutingTests(unittest.TestCase):
             ({"type": "reconnaissance", "description": "Nmap port scan detected", "raw_kv": {}}, "reconnaissance"),
             ({"type": "vulnerability", "description": "CVE-9999-0001 vulnerable package", "raw_kv": {}}, "vulnerability_management"),
             ({"type": "mailbox_rule_change", "description": "Exchange: New-InboxRule", "raw_kv": {"operation": "New-InboxRule"}}, "phishing"),
-            ({"type": "oauth_consent", "description": "Consent to application", "raw_kv": {"operation": "Consent to application"}}, "phishing"),
+            ({"type": "oauth_consent", "description": "Consent to application", "raw_kv": {"operation": "Consent to application"}}, "m365_identity_compromise"),
             ({"type": "privilege_change", "description": "Add member", "raw_kv": {"operation": "Add member to role"}}, "m365_identity_compromise"),
             ({"type": "ransomware", "description": "Ransomware", "mitre_technique": ["T1486"]}, "ransomware"),
             ({"type": "fim_change", "description": "FIM: modified /etc/passwd", "raw_kv": {"wazuh_rule_groups": ["syscheck"]}}, "file_integrity"),
@@ -143,7 +143,7 @@ class SkillRoutingTests(unittest.TestCase):
             ({"type": "web_attack", "description": "SQL injection UNION SELECT", "raw_kv": {}}, "sql_injection"),
             ({"type": "insider_risk", "description": "Correlated bulk download", "raw_kv": {}}, "insider_threat"),
             ({"type": "data_exfiltration", "description": "DLP rule match", "raw_kv": {}}, "data_exfiltration"),
-            ({"type": "security_alert", "description": "APT29 attributed threat actor", "raw_kv": {}}, "apt_activity"),
+            ({"type": "security_alert", "source": "threat_intel", "description": "APT29 attributed threat actor", "raw_kv": {"attribution_evidence": True}}, "apt_activity"),
             ({"type": "zero_day", "description": "CVE-2026-0001 vendor fix unavailable", "raw_kv": {"is_zero_day": True}}, "zero_day"),
             ({"type": "cloud_alert", "description": "AWS root UnauthorizedAccess", "raw_kv": {}}, "cloud_native"),
             ({"type": "k8s_alert", "description": "Privileged container hostPath mount", "raw_kv": {}}, "container_kubernetes"),
@@ -160,7 +160,7 @@ class DeterministicFindingTests(unittest.TestCase):
         cases = [
             ({"type": "malware"}, "malware"), ({"type": "ransomware"}, "ransomware"),
             ({"type": "phishing"}, "phishing"), ({"type": "credential_attack"}, "credential_attack"),
-            ({"type": "oauth_consent"}, "phishing"),
+            ({"type": "oauth_consent"}, "credential_attack"),
             ({"type": "privilege_change"}, "credential_attack"),
             ({"type": "network_attack"}, "suspicious_network"),
             ({"type": "reconnaissance"}, "reconnaissance"),
@@ -170,7 +170,8 @@ class DeterministicFindingTests(unittest.TestCase):
             ({"type": "dos_attack"}, "ddos"), ({"type": "web_attack"}, "sql_injection"),
             ({"type": "insider_risk"}, "insider_threat"),
             ({"type": "data_exfiltration"}, "data_exfiltration"),
-            ({"type": "security_alert", "description": "APT29 attributed threat actor"}, "apt_activity"),
+            ({"type": "security_alert", "source": "threat_intel", "description": "APT29 attributed threat actor",
+              "raw_kv": {"attribution_evidence": True}}, "apt_activity"),
             ({"type": "security_alert", "description": "Defender CommandAndControl alert"}, "suspicious_network"),
             ({"type": "security_alert", "description": "Defender ransomware alert"}, "ransomware"),
             ({"type": "zero_day"}, "zero_day"), ({"type": "cloud_alert"}, "cloud_native"),
@@ -183,6 +184,26 @@ class DeterministicFindingTests(unittest.TestCase):
 
     def test_generic_event_does_not_create_deterministic_finding(self):
         self.assertIsNone(detections.classify({"type": "generic", "description": "routine audit", "raw_kv": {}}))
+
+    def test_actor_keyword_without_attribution_evidence_is_not_apt(self):
+        event = {"type": "security_alert", "source": "wazuh", "severity": "high",
+                 "description": "connection attempt mentions APT29", "raw_kv": {}}
+        self.assertIsNone(detections.classify(event))
+        self.assertIsNone(skills.select_skill(event))
+
+    def test_web_attack_subtypes_are_distinct(self):
+        cases = {
+            "SQL injection UNION SELECT": "sql_injection",
+            "Cross-site scripting XSS payload": "cross_site_scripting",
+            "Directory path traversal ../../etc/passwd": "path_traversal",
+            "OS command injection attempt": "command_injection",
+            "Remote file inclusion RFI": "remote_file_inclusion",
+        }
+        for description, expected in cases.items():
+            finding = detections.classify({"type": "web_attack", "severity": "high",
+                                           "description": description, "raw_kv": {}})
+            with self.subTest(description=description):
+                self.assertEqual(finding["attack_subtype"], expected)
 
 
 class FilterTests(unittest.TestCase):
@@ -263,6 +284,15 @@ class ThreatIntelSafetyTests(unittest.TestCase):
 
 
 class DashboardAttackDetailTests(unittest.TestCase):
+    def test_legacy_finding_taxonomy_is_inferred_without_mutating_input(self):
+        finding = {"id": "legacy", "category": "credential_attack", "threat_classification": "Brute Force",
+                   "severity": "high", "confidence": 0.8, "evidence": {}, "ai_result": {}}
+        original = dict(finding)
+        detail = dashboard_agg.attack_detail(finding, [])
+        self.assertEqual(detail["finding"]["attack_subtype"], "brute_force")
+        self.assertEqual(detail["finding"]["subtype_origin"], "classification_display_match")
+        self.assertEqual(finding, original)
+
     def test_attack_detail_joins_and_redacts_source_event(self):
         finding = {"id": "finding-1", "category": "vulnerability_management", "threat_classification": "Vulnerability",
                    "severity": "high", "confidence": 0.88, "mitre_technique": ["T1190"],
@@ -341,6 +371,14 @@ class DashboardAttackDetailTests(unittest.TestCase):
         self.assertEqual(detail["quality"]["maturity"], "validation_only")
         self.assertIn("Destination asset or account", detail["quality"]["missing_fields"])
         self.assertTrue(any("not source-sensor" in item for item in detail["quality"]["limitations"]))
+
+    def test_attribution_distribution_uses_canonical_analyst_label(self):
+        rows = dashboard_agg.threat_type_distribution_counts(
+            [{"category": "apt_activity", "total": 2}]
+        )
+        attribution = next(row for row in rows if row["label"] == "Threat Actor Attribution")
+        self.assertEqual(attribution["count"], 2)
+        self.assertNotIn("APT Activity", {row["label"] for row in rows})
 
     def test_endpoint_malware_user_does_not_turn_asset_into_mail_recipient(self):
         finding = {"id": "finding-malware", "category": "malware", "threat_classification": "Malware",

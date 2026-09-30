@@ -10,6 +10,8 @@ from pathlib import Path
 import yaml
 
 ROOT = Path(__file__).resolve().parent.parent
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
 FAILURES: list[str] = []
 WARNINGS: list[str] = []
 PASSES: list[str] = []
@@ -77,25 +79,27 @@ def audit_section_2():
     skills_dir = ROOT / "hermes" / "app" / "skills"
     cats = set()
     for f in sorted(skills_dir.glob("*.yaml")): cats.add(yaml.safe_load(f.read_text())["category"])
+    registry = yaml.safe_load((ROOT / "config" / "detection_taxonomy.yaml").read_text())
+    registry_cats = set(registry.get("categories", {}))
     ok(f"Found {len(cats)} categories across {len(list(skills_dir.glob('*.yaml')))} skills")
-    if len(cats) != 17: fail(f"Expected 17 categories, found {len(cats)}")
-    else: ok("Confirmed 17 categories (8 original + 9 new)")
+    if len(registry_cats) != 17: fail(f"Expected 17 registry categories, found {len(registry_cats)}")
+    else: ok(f"Canonical taxonomy {registry['version']} defines 17 top-level categories")
+    if cats != registry_cats:
+        fail(f"Skill/registry category drift: missing={sorted(registry_cats-cats)}, extra={sorted(cats-registry_cats)}")
+    else: ok("All Hermes skill categories are registered canonically")
     agg = (ROOT / "dashboard" / "app" / "aggregations.py").read_text()
     m = re.search(r"_CATEGORY_TO_THREAT_TYPE\s*=\s*\{(.*?)\}", agg, re.DOTALL)
     mapped = set(re.findall(r'"([a-z_]+)":\s*"', m.group(1))) if m else set()
-    orphaned = cats - mapped
+    orphaned = registry_cats - mapped
     if orphaned: fail(f"Categories not mapped in dashboard: {sorted(orphaned)}")
     else: ok("All categories mapped in dashboard")
     agents = (ROOT / "hermes" / "app" / "agents.py").read_text()
-    m2 = re.search(r"_CLASS_BY_CATEGORY\s*=\s*\{(.*?)\}", agents, re.DOTALL)
-    agents_cats = set(re.findall(r'"([a-z_]+)":\s*"', m2.group(1))) if m2 else set()
-    if cats - agents_cats: fail(f"agents.py missing: {sorted(cats - agents_cats)}")
-    else: ok("agents.py covers all 17 categories")
+    if "from shared.taxonomy import" in agents: ok("Hermes agents resolve labels/subtypes from canonical taxonomy")
+    else: fail("Hermes agents do not import canonical taxonomy")
     jev = (ROOT / "jev-client" / "app" / "reasoning.py").read_text()
-    m3 = re.search(r"_CLASSIFICATION_BY_CATEGORY\s*=\s*\{(.*?)\}", jev, re.DOTALL)
-    jev_cats = set(re.findall(r'"([a-z_]+)":\s*"', m3.group(1))) if m3 else set()
-    if cats - jev_cats: fail(f"jev-client missing: {sorted(cats - jev_cats)}")
-    else: ok("jev-client covers all 17 categories")
+    if "from shared.taxonomy import" in jev and "category_ids" in jev:
+        ok("Jev validates AI proposals against canonical taxonomy")
+    else: fail("Jev does not validate against canonical taxonomy")
 
 def audit_section_3():
     section("SECTION 3: Skill event_types <-> Normalizer-Produced Types")
@@ -127,6 +131,9 @@ def audit_section_4():
     skills_dir = ROOT / "hermes" / "app" / "skills"
     used = set()
     for f in sorted(skills_dir.glob("*.yaml")): used |= set(yaml.safe_load(f.read_text()).get("mitre_technique", []))
+    registry = yaml.safe_load((ROOT / "config" / "detection_taxonomy.yaml").read_text())
+    for category in registry.get("categories", {}).values():
+        for subtype in (category.get("subtypes") or {}).values(): used |= set(subtype.get("mitre", []))
     agg = (ROOT / "dashboard" / "app" / "aggregations.py").read_text()
     m = re.search(r"MITRE_NAMES\s*=\s*\{(.*?)\}", agg, re.DOTALL)
     known = set(re.findall(r'"(T\d+(?:\.\d+)?)"', m.group(1))) if m else set()
@@ -194,7 +201,8 @@ def audit_section_7():
         ({"type": "web_attack", "description": "SQL Injection detected: Union.Select"}, "sql_injection"),
         ({"type": "external_sharing", "description": "OneDrive: AnonymousLinkCreated", "raw_kv": {"operation": "AnonymousLinkCreated"}}, "insider_threat"),
         ({"type": "data_exfiltration", "description": "SecurityComplianceCenter: DlpRuleMatch", "raw_kv": {"operation": "DlpRuleMatch"}}, "data_exfiltration"),
-        ({"type": "security_alert", "description": "APT29 infrastructure detected"}, "apt_activity"),
+        ({"type": "security_alert", "source": "threat_intel", "description": "APT29 infrastructure detected",
+          "raw_kv": {"attribution_evidence": True}}, "apt_activity"),
         ({"type": "security_alert", "description": "possible pass-the-hash attack", "mitre_technique": ["T1550.002"]}, "credential_access"),
         ({"type": "security_alert", "description": "WMI query for System Information Discovery", "mitre_technique": ["T1082", "T1047"]}, "endpoint_discovery"),
         ({"type": "zero_day", "description": "ZERO-DAY: CVE-2025-9999 vendor fix unavailable", "raw_kv": {"is_zero_day": True}}, "zero_day"),
@@ -208,11 +216,16 @@ def audit_section_7():
     if passed: ok(f"All {len(cases)} test cases pass")
 
 def audit_section_8():
-    section("SECTION 8: APT Reclassification Mechanism")
+    section("SECTION 8: Threat Attribution Is Context, Not Reclassification")
     worker = (ROOT / "hermes" / "app" / "worker.py").read_text()
     providers = (ROOT / "threat-intel" / "app" / "providers.py").read_text()
-    if "_detect_apt_indicator" in worker: ok("worker.py has APT reclassification")
-    else: fail("worker.py missing APT reclassification")
+    if "_detect_attribution" in worker and '"attribution_status"' in worker:
+        ok("worker.py records provider attribution as a separate dimension")
+    else: fail("worker.py missing separate attribution metadata")
+    canonical_block = re.search(r"def _canonical_result\(.*?\n\s*return canonical, metadata", worker, re.DOTALL)
+    if canonical_block and 'category = deterministic.get("category") or triage["category"]' in canonical_block.group(0):
+        ok("Attribution cannot replace the deterministic attack category")
+    else: fail("Could not prove deterministic category authority")
     if "detail" in providers and "OTX pulses" in providers: ok("providers.py surfaces OTX pulse names")
     else: fail("providers.py missing pulse surfacing")
     if (ROOT / "hermes" / "app" / "skills" / "apt_activity.yaml").exists(): ok("apt_activity.yaml exists")

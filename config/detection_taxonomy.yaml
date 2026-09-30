@@ -1,0 +1,167 @@
+version: "2026.09.30"
+schema_version: 1
+categories:
+  malware:
+    display_name: Malware
+    family: endpoint_malware
+    default_subtype: generic_malware
+    subtypes:
+      generic_malware: {display_name: Malware, mitre: [T1105, T1204]}
+      trojan: {display_name: Trojan, mitre: [T1105, T1204]}
+      virus: {display_name: Virus, mitre: [T1105, T1204]}
+      worm: {display_name: Worm, mitre: [T1105]}
+      malicious_file: {display_name: Malicious File, mitre: [T1204]}
+  ransomware:
+    display_name: Ransomware
+    family: impact
+    default_subtype: data_encryption
+    subtypes:
+      data_encryption: {display_name: Data Encryption for Impact, mitre: [T1486]}
+      recovery_inhibition: {display_name: Recovery Inhibition, mitre: [T1490]}
+      ransomware_behavior: {display_name: Ransomware Behavior, mitre: [T1486, T1490]}
+  phishing:
+    display_name: Phishing
+    family: social_engineering
+    default_subtype: malicious_email
+    subtypes:
+      malicious_email: {display_name: Malicious Email, mitre: [T1566]}
+      spearphishing_attachment: {display_name: Spearphishing Attachment, mitre: [T1566.001]}
+      spearphishing_link: {display_name: Spearphishing Link, mitre: [T1566.002]}
+      mailbox_rule_abuse: {display_name: Mailbox Rule Abuse, mitre: [T1114.003]}
+      oauth_consent_phishing: {display_name: OAuth Consent Phishing, mitre: [T1528]}
+  credential_attack:
+    display_name: Credential Attack
+    family: identity_attack
+    default_subtype: credential_activity
+    subtypes:
+      credential_activity: {display_name: Credential Attack, mitre: [T1110]}
+      brute_force: {display_name: Brute Force, mitre: [T1110]}
+      password_spray: {display_name: Password Spray, mitre: [T1110.003]}
+      credential_stuffing: {display_name: Credential Stuffing, mitre: [T1110.004]}
+      credential_dumping: {display_name: Credential Dumping, mitre: [T1003]}
+      lsass_memory: {display_name: LSASS Memory Dumping, mitre: [T1003.001]}
+      dcsync: {display_name: DCSync, mitre: [T1003.006]}
+      pass_the_hash: {display_name: Pass the Hash, mitre: [T1550.002]}
+      kerberoasting: {display_name: Kerberoasting, mitre: [T1558.003]}
+      oauth_consent_abuse: {display_name: OAuth Consent Abuse, mitre: [T1528]}
+      privilege_change: {display_name: Unauthorized Privilege Change, mitre: [T1098]}
+      suspicious_sign_in: {display_name: Suspicious Sign-In, mitre: [T1078]}
+  suspicious_network:
+    display_name: Suspicious Network Activity
+    family: network_intrusion
+    default_subtype: network_intrusion
+    subtypes:
+      network_intrusion: {display_name: Network Intrusion, mitre: []}
+      command_and_control: {display_name: Command and Control, mitre: [T1071]}
+      lateral_movement: {display_name: Lateral Movement, mitre: [T1021]}
+      exploit_attempt: {display_name: Network Exploit Attempt, mitre: [T1190]}
+  reconnaissance:
+    display_name: Reconnaissance and Discovery
+    family: discovery
+    default_subtype: network_service_scanning
+    subtypes:
+      external_active_scanning: {display_name: External Active Scanning, mitre: [T1595]}
+      network_service_scanning: {display_name: Network Service Scanning, mitre: [T1046]}
+      endpoint_system_discovery: {display_name: System Information Discovery, mitre: [T1082]}
+      remote_system_discovery: {display_name: Remote System Discovery, mitre: [T1018]}
+      account_discovery: {display_name: Account Discovery, mitre: [T1087]}
+      process_discovery: {display_name: Process Discovery, mitre: [T1057]}
+      network_configuration_discovery: {display_name: Network Configuration Discovery, mitre: [T1016, T1049]}
+      wmi_discovery: {display_name: WMI Discovery, mitre: [T1047]}
+  vulnerability_management:
+    display_name: Vulnerability
+    family: exposure
+    default_subtype: vulnerable_software
+    cve_relevance: required
+    subtypes:
+      vulnerable_software: {display_name: Vulnerable Software, mitre: []}
+      actively_exploited_vulnerability: {display_name: Actively Exploited Vulnerability, mitre: [T1190]}
+      unpatched_vulnerability: {display_name: Unpatched Vulnerability, mitre: [T1190]}
+  file_integrity:
+    display_name: File Integrity
+    family: endpoint_integrity
+    default_subtype: file_change
+    subtypes:
+      file_change: {display_name: File Integrity Change, mitre: []}
+      sensitive_file_change: {display_name: Sensitive File Change, mitre: []}
+  supply_chain:
+    display_name: Supply Chain Compromise
+    family: supply_chain
+    default_subtype: dependency_tampering
+    subtypes:
+      dependency_tampering: {display_name: Dependency Tampering, mitre: [T1195.002]}
+      package_manager_tampering: {display_name: Package Manager Tampering, mitre: [T1195, T1195.002]}
+  ddos:
+    display_name: Denial of Service
+    family: impact
+    default_subtype: network_denial_of_service
+    subtypes:
+      network_denial_of_service: {display_name: Network Denial of Service, mitre: [T1498]}
+      endpoint_denial_of_service: {display_name: Endpoint Denial of Service, mitre: [T1499]}
+      syn_flood: {display_name: SYN Flood, mitre: [T1498]}
+      udp_flood: {display_name: UDP Flood, mitre: [T1498]}
+      http_flood: {display_name: HTTP Flood, mitre: [T1498]}
+  sql_injection:
+    display_name: Web Application Attack
+    legacy_display_name: SQL Injection
+    family: web_application_attack
+    default_subtype: unknown_web_exploit
+    cve_relevance: optional
+    subtypes:
+      sql_injection: {display_name: SQL Injection, mitre: [T1190]}
+      cross_site_scripting: {display_name: Cross-Site Scripting, mitre: [T1190]}
+      path_traversal: {display_name: Path Traversal, mitre: [T1190]}
+      command_injection: {display_name: Command Injection, mitre: [T1059]}
+      remote_file_inclusion: {display_name: Remote File Inclusion, mitre: [T1190]}
+      unknown_web_exploit: {display_name: Web Application Exploit, mitre: [T1190]}
+  insider_threat:
+    display_name: Insider Threat
+    family: insider_risk
+    default_subtype: suspicious_data_access
+    subtypes:
+      suspicious_data_access: {display_name: Suspicious Data Access, mitre: [T1005]}
+      bulk_download: {display_name: Bulk Download, mitre: [T1005]}
+      anonymous_external_sharing: {display_name: Anonymous External Sharing, mitre: [T1567]}
+  data_exfiltration:
+    display_name: Data Exfiltration
+    family: exfiltration
+    default_subtype: policy_detected_exfiltration
+    subtypes:
+      policy_detected_exfiltration: {display_name: DLP-Detected Exfiltration, mitre: [T1041, T1567]}
+      removable_media_exfiltration: {display_name: Removable Media Exfiltration, mitre: [T1052]}
+      web_service_exfiltration: {display_name: Web Service Exfiltration, mitre: [T1567]}
+  apt_activity:
+    display_name: Threat Actor Attribution
+    family: attribution
+    default_subtype: suspected_actor_attribution
+    subtypes:
+      suspected_actor_attribution: {display_name: Suspected Threat Actor Attribution, mitre: []}
+      provider_reported_attribution: {display_name: Provider-Reported Threat Actor Attribution, mitre: []}
+      corroborated_attribution: {display_name: Corroborated Threat Actor Attribution, mitre: []}
+  zero_day:
+    display_name: Zero-Day Exploitation
+    family: exposure
+    default_subtype: suspected_zero_day
+    cve_relevance: required
+    subtypes:
+      suspected_zero_day: {display_name: Suspected Zero-Day, mitre: [T1190, T1203]}
+      actively_exploited_zero_day: {display_name: Actively Exploited Zero-Day, mitre: [T1190, T1203]}
+  cloud_native:
+    display_name: Cloud-Native Attack
+    family: cloud_attack
+    default_subtype: cloud_security_alert
+    manual_only: true
+    subtypes:
+      cloud_security_alert: {display_name: Cloud Security Alert, mitre: [T1526, T1580]}
+      cloud_iam_abuse: {display_name: Cloud IAM Abuse, mitre: [T1078]}
+      public_cloud_exposure: {display_name: Public Cloud Exposure, mitre: []}
+  container_kubernetes:
+    display_name: Container/Kubernetes Threat
+    family: container_attack
+    default_subtype: kubernetes_security_alert
+    manual_only: true
+    subtypes:
+      kubernetes_security_alert: {display_name: Kubernetes Security Alert, mitre: [T1610, T1613]}
+      privileged_container: {display_name: Privileged Container, mitre: [T1610]}
+      container_escape: {display_name: Container Escape, mitre: [T1611]}
+      service_account_abuse: {display_name: Service Account Abuse, mitre: [T1078]}

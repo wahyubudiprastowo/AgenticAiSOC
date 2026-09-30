@@ -28,15 +28,16 @@ def ensure_collection() -> None:
             create_resp = client.put(f"{BASE_URL}/collections/{QDRANT_COLLECTION}", json={"vectors": {"size": QDRANT_VECTOR_SIZE, "distance": "Cosine"}})
             create_resp.raise_for_status(); _collection_ready = True
     except Exception: pass
-def store_incident_memory(finding_id: str, evidence_obj: dict, jev_result: dict) -> None:
+def store_incident_memory(finding_id: str, evidence_obj: dict, result: dict) -> None:
     if not QDRANT_ENABLED: return
     ensure_collection()
     if not _collection_ready: return
     text = f"{evidence_obj.get('finding', '')} " + " ".join(evidence_obj.get("evidence", [])); vector = _hash_embed(text)
     payload = {"finding_id": finding_id, "finding_text": evidence_obj.get("finding"), "context": evidence_obj.get("context"),
-               "threat_classification": jev_result.get("threat_classification"), "mitre_technique": jev_result.get("mitre_technique", []),
-               "confidence": jev_result.get("confidence"), "severity": jev_result.get("severity"),
-               "recommendation": jev_result.get("investigation_recommendation")}
+               "threat_classification": result.get("threat_classification"), "mitre_technique": result.get("mitre_technique", []),
+               "confidence": result.get("confidence"), "severity": result.get("severity"),
+               "recommendation": result.get("recommendation"), "ai_verdict": result.get("ai_verdict"),
+               "ai_reasoning_mode": result.get("ai_reasoning_mode")}
     try:
         with httpx.Client(timeout=10) as client:
             resp = client.put(f"{BASE_URL}/collections/{QDRANT_COLLECTION}/points",

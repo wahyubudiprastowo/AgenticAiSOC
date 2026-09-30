@@ -5,6 +5,7 @@ from typing import Optional
 from fastapi import FastAPI, HTTPException, Query
 from pydantic import BaseModel
 from . import db, worker
+from shared.taxonomy import public_registry
 logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"))
 logger = logging.getLogger("soc-core.main")
 app = FastAPI(title="SOC Core", version="4.0.0")
@@ -18,57 +19,59 @@ async def startup_event():
 @app.get("/health")
 async def health(): return {"status": "ok", "service": "soc-core"}
 @app.get("/health/database")
-async def database_health():
+def database_health():
     if not db.health(): raise HTTPException(status_code=503, detail="database unavailable")
     return {"status": "ok", "service": "postgresql"}
+@app.get("/taxonomy")
+async def taxonomy(): return public_registry()
 @app.get("/stats")
-async def get_stats(): return db.stats()
+def get_stats(): return db.stats()
 @app.get("/events")
-async def get_events(limit: int = 100, severity: str | None = None, since_minutes: int | None = None):
+def get_events(limit: int = 100, severity: str | None = None, since_minutes: int | None = None):
     events = db.list_events(limit=limit, severity=severity, since_minutes=since_minutes)
     return {"count": len(events), "events": events}
 @app.get("/events/{event_id}")
-async def get_event(event_id: str):
+def get_event(event_id: str):
     event = db.get_event(event_id)
     if not event: raise HTTPException(status_code=404, detail="event not found")
     return event
 @app.get("/findings")
-async def get_findings(limit: int = Query(50, ge=1, le=200)):
+def get_findings(limit: int = Query(50, ge=1, le=200)):
     findings = db.list_findings(limit); return {"count": len(findings), "findings": findings}
 @app.get("/findings/recent-window")
-async def findings_recent_window(minutes: int = Query(1440, ge=1)):
-    findings = db.findings_since(minutes); return {"count": len(findings), "findings": findings}
+def findings_recent_window(minutes: int = Query(1440, ge=1), limit: int = Query(200, ge=1, le=500)):
+    findings = db.findings_since(minutes, limit); return {"count": len(findings), "findings": findings}
 @app.get("/findings/search")
-async def findings_search(start: datetime | None = None, end: datetime | None = None,
+def findings_search(start: datetime | None = None, end: datetime | None = None,
                           limit: int = Query(100, ge=1, le=200), offset: int = Query(0, ge=0),
                           severity: str | None = None, category: str | None = None, q: str | None = None):
     if start and end and start > end: raise HTTPException(status_code=400, detail="start must be before end")
     findings, total = db.search_findings(start, end, limit, offset, severity, category, q)
     return {"count": len(findings), "total": total, "limit": limit, "offset": offset, "findings": findings}
 @app.get("/findings/analytics")
-async def findings_analytics(start: datetime | None = None, end: datetime | None = None,
+def findings_analytics(start: datetime | None = None, end: datetime | None = None,
                              bucket: str = Query("hour", pattern="^(hour|day|week|month|year)$"),
                              severity: str | None = None, category: str | None = None, q: str | None = None):
     if start and end and start > end: raise HTTPException(status_code=400, detail="start must be before end")
     return db.findings_analytics(start, end, bucket, severity, category, q)
 @app.get("/findings/by-event/{event_id}")
-async def finding_by_event(event_id: str):
+def finding_by_event(event_id: str):
     try: canonical_id = str(uuid.UUID(event_id))
     except ValueError: raise HTTPException(status_code=400, detail="invalid event id")
     finding = db.get_finding_by_event_id(canonical_id)
     if not finding: raise HTTPException(status_code=404, detail="finding not found for event")
     return finding
 @app.get("/findings/detail/{finding_id}")
-async def finding_detail(finding_id: str):
+def finding_detail(finding_id: str):
     try: canonical_id = str(uuid.UUID(finding_id))
     except ValueError: raise HTTPException(status_code=400, detail="invalid finding id")
     finding = db.get_finding(canonical_id)
     if not finding: raise HTTPException(status_code=404, detail="finding not found")
     return finding
 @app.get("/analytics/timeline")
-async def get_timeline(hours: int = 24): return {"hours": hours, "buckets": db.timeline_buckets(hours=hours)}
+def get_timeline(hours: int = 24): return {"hours": hours, "buckets": db.timeline_buckets(hours=hours)}
 @app.get("/analytics/overview")
-async def get_overview(start: datetime | None = None, end: datetime | None = None,
+def get_overview(start: datetime | None = None, end: datetime | None = None,
                        bucket: str = Query("hour", pattern="^(hour|day|week|month|year)$"),
                        severity: str | None = None, category: str | None = None,
                        limit: int = Query(25, ge=1, le=100)):
@@ -87,7 +90,7 @@ class IngestEventRequest(BaseModel):
     is_synthetic_test: bool = False
     raw: Optional[dict] = None
 @app.post("/events/ingest")
-async def ingest_event(payload: IngestEventRequest):
+def ingest_event(payload: IngestEventRequest):
     raw_payload = dict(payload.raw or {})
     raw_payload.setdefault("description", payload.description)
     if payload.test_marker:

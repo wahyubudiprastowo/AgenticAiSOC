@@ -11,7 +11,7 @@ chmod 600 .env
 ./scripts/verify_environment.sh
 docker compose up -d --build
 ./scripts/smoke_test.sh
-python3 scripts/audit_verify.py      # expect: 75 PASS / 0 WARN / 0 FAIL
+python3 scripts/audit_verify.py      # expect: 77 PASS / 0 WARN / 0 FAIL
 ./scripts/simulate_events.sh all
 ```
 Open **http://localhost:38080** for the dashboard.
@@ -51,6 +51,14 @@ the server and supports **1 hour,
 date and time. The timeline can be grouped by hour, day, week, month,
 or year. Search inside Attack Details further narrows the current global
 scope; findings load 100 at a time.
+
+The selected preset is retained in browser storage. Choosing another preset
+only changes the query scope; it never deletes PostgreSQL rows. List endpoints
+return compact finding/event summaries, while `/api/findings/{id}` loads the
+complete source evidence, IOC provider results, and AI result on demand. SOC
+Core runs synchronous PostgreSQL work in FastAPI's worker pool and queues brief
+connection bursts (`SOC_DB_POOL_*`), so an All Time refresh does not block
+health and detail requests.
 
 The **Settings** menu provides a read-only inventory of the active runtime
 configuration, grouped by Wazuh, syslog, SOC pipeline, Hermes/AI,
@@ -132,6 +140,27 @@ the status to `complete`; it does not create a second finding. Dashboard finding
 queries use SOC Core, so a Hermes, Jev, Qdrant, or threat-intelligence outage does
 not hide already stored findings. Existing rows are preserved by additive schema
 changes and are treated as complete.
+
+SOC Core owns the canonical category, subtype, confidence, and severity. Hermes
+may add evidence and Jev may return an advisory verdict, but fallback or remote
+AI cannot overwrite those canonical values. When the remote Jev provider is
+unavailable, `ai_verdict=unavailable` and `ai_reasoning_mode=fallback` remain
+visible instead of being presented as successful remote reasoning.
+
+## Canonical taxonomy and historical findings
+
+`config/detection_taxonomy.yaml` is the versioned registry used by SOC Core,
+Hermes, Jev, and the dashboard. The 17 IDs remain stable dashboard buckets;
+precise behavior is stored in `attack_family` and `attack_subtype`. This
+separates endpoint Discovery from external scanning, splits web attacks into
+SQL injection/XSS/path traversal/command injection/RFI, and separates identity
+attack subtypes such as brute force, spraying, dumping, pass-the-hash, OAuth
+abuse, and privilege changes. Threat-actor attribution is supporting context
+and cannot replace the detected attack type.
+
+Legacy findings are not rewritten. Attack Details derives a conservative
+family/subtype at read time and labels its origin as `category_default` or
+`classification_display_match`; new rows use `subtype_origin=stored`.
 
 ## Structured IOC and CVE synchronization
 
@@ -224,10 +253,10 @@ documented in `reports/pipeline_audit_20260929.md`.
 | 8 | File Integrity | Wazuh FIM | Automated |
 | 9 | Supply Chain | Wazuh FIM package-manager paths | Automated |
 | 10 | DDoS | Fortigate DoS sensor | Automated |
-| 11 | SQL Injection | Fortigate WAF/IPS | Automated |
+| 11 | Web Application Attack | Fortigate WAF/IPS | Automated; subtype distinguishes SQLi/XSS/traversal/command injection/RFI |
 | 12 | Insider Threat | M365 mass-download ops | Automated |
 | 13 | Data Exfiltration | Microsoft Purview DLP | Automated |
-| 14 | APT Activity | OTX/ThreatFox attribution | Automated |
+| 14 | Threat Actor Attribution | OTX/ThreatFox attribution evidence | Automated context; not proof of an APT campaign |
 | 15 | Zero-Day | Wazuh unfixed + CYFIRMA | Probabilistic / manual review |
 | 16 | Cloud-Native | Manual `/events/ingest` | Manual only |
 | 17 | Container/Kubernetes | Manual `/events/ingest` | Manual only |
@@ -256,7 +285,7 @@ agentic-soc-platform/
 ├── database/init.sql
 ├── prompts/
 └── scripts/
-    ├── audit_verify.py             # 10 sections, 75 checks
+    ├── audit_verify.py             # 10 sections, 77 checks
     ├── verify_environment.sh
     ├── smoke_test.sh
     └── simulate_events.sh
