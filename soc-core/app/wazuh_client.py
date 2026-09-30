@@ -107,6 +107,15 @@ def _document_hash(document: dict) -> str:
     payload = json.dumps(document.get("_source", document), sort_keys=True, separators=(",", ":"), default=str)
     return hashlib.sha256(payload.encode()).hexdigest()
 
+def _nested(document: dict, *paths: str):
+    for path in paths:
+        value = document
+        for key in path.split("."):
+            if not isinstance(value, dict): value = None; break
+            value = value.get(key)
+        if value not in (None, "", "-"): return value
+    return None
+
 
 def _infer_alert_type(description: str, groups: list[str], mitre: list[str]) -> str:
     text = (description or "").lower()
@@ -137,12 +146,21 @@ def wazuh_alert_to_normalized(alert):
     groups = rule.get("groups", []) or []; mitre = rule.get("mitre", {}).get("id", []) or []
     description = rule.get("description") or "Wazuh alert"
     severity = "critical" if level >= 14 else "high" if level >= 10 else "medium" if level >= 7 else "low"
-    return {"id": _stable_id("alert", alert), "source": "wazuh", "type": _infer_alert_type(description, groups, mitre),
-            "severity": severity, "src_ip": src.get("data", {}).get("srcip"), "destination": src.get("agent", {}).get("name"),
+    alert_type = _infer_alert_type(description, groups, mitre)
+    src_ip = _nested(src, "data.srcip", "data.src_ip", "data.win.eventdata.ipAddress",
+                     "data.win.eventdata.sourceNetworkAddress", "win.eventdata.ipAddress", "source.ip")
+    user_name = _nested(src, "data.dstuser", "data.srcuser", "data.user",
+                        "data.win.eventdata.targetUserName", "data.win.eventdata.subjectUserName",
+                        "win.eventdata.targetUserName", "user.name")
+    action = _nested(src, "data.action", "event.action")
+    return {"id": _stable_id("alert", alert), "source": "wazuh", "type": alert_type,
+            "severity": severity, "src_ip": src_ip, "destination": src.get("agent", {}).get("name"),
+            "user_name": user_name, "action": action,
             "description": description, "mitre_technique": mitre,
             "time": src.get("@timestamp", datetime.now(timezone.utc).isoformat()), "raw": src, "raw_hash": _document_hash(alert),
             "raw_kv": {"wazuh_rule_id": rule.get("id"), "wazuh_rule_level": level, "wazuh_rule_groups": groups,
-                       "security_signal": level >= 7 or bool(mitre)}}
+                       "security_signal": level >= 7 or alert_type in {"credential_attack", "malware", "ransomware",
+                           "network_attack", "reconnaissance", "web_attack", "dos_attack"}}}
 def wazuh_fim_to_normalized(event):
     src = event.get("_source", event); rule = src.get("rule", {}); syscheck = src.get("syscheck", {}); level = rule.get("level", 7)
     severity = "critical" if level >= 14 else "high" if level >= 10 else "medium" if level >= 7 else "low"

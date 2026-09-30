@@ -6,7 +6,7 @@ match:
   type_only: true
   operations: [MemberAdded, Add member to role, Add app role assignment to service principal]
   keywords: ["risky user", "impossible travel", "unfamiliar sign-in", "service principal credential"]
-  defender_categories: [CredentialAccess, Persistence, PrivilegeEscalation]
+  defender_categories: [CredentialAccess, Persistence, PrivilegeEscalation, InitialAccess]
 priority: 15
 mitre_technique: ["T1078", "T1098"]
 investigation_steps:

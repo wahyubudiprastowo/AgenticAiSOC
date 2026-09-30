@@ -68,7 +68,12 @@ def normalize_syslog_line(raw: str, source_hint: Optional[str] = None, source_ip
         except ValueError: ts = datetime.now(timezone.utc)
     else: ts = datetime.now(timezone.utc)
     event_type = _infer_type(raw, kv)
+    attack_src_ip = kv.get("srcip") or kv.get("src_ip") or kv.get("sourceip") or kv.get("clientip")
+    normalized_kv = dict(kv)
+    normalized_kv["parser_format"] = "key_value" if kv else "text"
+    normalized_kv["parser_status"] = "generic_unclassified" if event_type == "generic" else "classified"
+    if source_ip: normalized_kv["observer_ip"] = source_ip
     return {"id": f"evt-{uuid.uuid4().hex[:10]}", "source": _infer_source(raw, kv, source_hint), "type": event_type,
-        "severity": _infer_severity(raw, kv), "src_ip": kv.get("srcip") or source_ip, "destination": kv.get("dstip"),
+        "severity": _infer_severity(raw, kv), "src_ip": attack_src_ip, "destination": kv.get("dstip"),
         "user_name": kv.get("user"), "action": kv.get("action"), "description": _build_description(kv, raw, event_type),
-        "time": ts.isoformat(), "raw": raw, "raw_hash": _sha256(raw), "raw_kv": kv}
+        "time": ts.isoformat(), "raw": raw, "raw_hash": _sha256(raw), "raw_kv": normalized_kv}

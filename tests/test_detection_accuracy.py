@@ -33,6 +33,7 @@ dashboard_agg = load_module("dashboard_aggregations_test", "dashboard/app/aggreg
 memory = load_module("hermes_memory_test", "hermes/app/memory.py")
 detections = load_module("soc_detections_test", "soc-core/app/detections.py")
 ioc_extractor = load_module("soc_ioc_extractor_test", "soc-core/app/ioc_extractor.py")
+filters = load_module("soc_filters_test", "soc-core/app/filters.py")
 
 
 class M365NormalizerTests(unittest.TestCase):
@@ -71,6 +72,21 @@ class SourceNormalizerTests(unittest.TestCase):
     def test_fortigate_ips_attack_is_intrusion(self):
         event = syslog.normalize_syslog_line('type=utm subtype=ips action=dropped msg="attack detected"', "fortigate")
         self.assertEqual(event["type"], "network_attack")
+
+    def test_transport_sender_is_observer_not_attack_source(self):
+        event = syslog.normalize_syslog_line("sshd service started", source_ip="192.0.2.10")
+        self.assertIsNone(event["src_ip"])
+        self.assertEqual(event["raw_kv"]["observer_ip"], "192.0.2.10")
+        self.assertEqual(event["raw_kv"]["parser_status"], "generic_unclassified")
+
+    def test_wazuh_extracts_windows_source_and_user(self):
+        document = {"_id": "win-auth", "_source": {"agent": {"name": "dc01"},
+            "rule": {"level": 10, "description": "Multiple Windows Logon Failures", "groups": [],
+                     "mitre": {"id": ["T1110"]}},
+            "data": {"win": {"eventdata": {"ipAddress": "198.51.100.12", "targetUserName": "alice"}}}}}
+        event = wazuh.wazuh_alert_to_normalized(document)
+        self.assertEqual(event["src_ip"], "198.51.100.12")
+        self.assertEqual(event["user_name"], "alice")
 
     def test_modern_wazuh_vulnerability_fields(self):
         document = {"_id": "vuln-doc", "_source": {
@@ -133,6 +149,7 @@ class SkillRoutingTests(unittest.TestCase):
             ({"type": "k8s_alert", "description": "Privileged container hostPath mount", "raw_kv": {}}, "container_kubernetes"),
             ({"type": "security_alert", "description": "possible pass-the-hash attack", "mitre_technique": ["T1550.002"]}, "credential_access"),
             ({"type": "security_alert", "description": "WMI query for System Information Discovery", "mitre_technique": ["T1082", "T1047"]}, "endpoint_discovery"),
+            ({"type": "security_alert", "description": "Unfamiliar sign-in", "raw_kv": {"alert_categories": ["InitialAccess"]}}, "m365_identity_compromise"),
         ]
         for event, expected in cases:
             with self.subTest(expected=expected): self.assertEqual(self.route(event), expected)
@@ -168,6 +185,17 @@ class DeterministicFindingTests(unittest.TestCase):
         self.assertIsNone(detections.classify({"type": "generic", "description": "routine audit", "raw_kv": {}}))
 
 
+class FilterTests(unittest.TestCase):
+    def test_informational_mitre_event_is_not_forwarded(self):
+        event = {"type": "informational", "severity": "low", "mitre_technique": ["T1078"],
+                 "raw_kv": {"security_signal": True}}
+        self.assertFalse(filters.should_forward_to_ai(event, mitre_matched=True))
+
+    def test_actionable_mitre_security_alert_is_forwarded(self):
+        event = {"type": "security_alert", "severity": "low", "mitre_technique": ["T1550.002"], "raw_kv": {}}
+        self.assertTrue(filters.should_forward_to_ai(event, mitre_matched=True))
+
+
 class IOCExtractionTests(unittest.TestCase):
     def test_extracts_supported_types_and_excludes_internal_or_transport_hashes(self):
         event = {"src_ip": "8.8.8.8", "destination": "10.0.0.8",
@@ -186,6 +214,27 @@ class IOCExtractionTests(unittest.TestCase):
 
 
 class ThreatIntelSafetyTests(unittest.TestCase):
+    def test_cyfirma_compound_stix_pattern_extracts_each_indicator(self):
+        values = providers._extract_stix_pattern_values(
+            "[file:hashes.md5 = 'abc' OR file:hashes.'SHA-256' = 'def' OR ipv4-addr:value = '198.51.100.10']")
+        self.assertEqual(values, {"abc", "def", "198.51.100.10"})
+
+    def test_nvd_cve_metadata_is_structured_without_becoming_malicious_ioc(self):
+        result = providers._nvd_result("CVE-2025-54293", {"vulnerabilities": [{"cve": {
+            "id": "CVE-2025-54293", "vulnStatus": "Analyzed", "published": "2025-01-01T00:00:00Z",
+            "lastModified": "2026-01-01T00:00:00Z", "cisaExploitAdd": "2026-02-01",
+            "metrics": {"cvssMetricV31": [{"type": "Primary", "cvssData": {
+                "baseScore": 9.8, "baseSeverity": "CRITICAL"}}]},
+            "references": [{"tags": ["Patch"]}],
+            "weaknesses": [{"description": [{"value": "CWE-78"}]}],
+        }}]})
+        self.assertEqual(result["mode"], "live")
+        self.assertEqual(result["cvss_score"], 9.8)
+        self.assertEqual(result["cvss_severity"], "critical")
+        self.assertTrue(result["cisa_kev"])
+        self.assertTrue(result["patch_reference"])
+        self.assertFalse(result["malicious"])
+
     def test_provider_error_does_not_create_mock_malicious_verdict(self):
         old = providers.THREAT_INTEL_MOCK_MODE
         providers.THREAT_INTEL_MOCK_MODE = False

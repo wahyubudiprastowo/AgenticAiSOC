@@ -3,11 +3,14 @@ import json, logging, os, time
 from fastapi import FastAPI
 from pydantic import BaseModel
 from typing import Optional
-from .reasoning import analyze, _mock_reasoning
+from .reasoning import analyze, _mock_reasoning, runtime_status
 logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"))
 app = FastAPI(title="Jev Reasoning Engine", version="4.0.0")
 @app.get("/health")
-async def health(): return {"status": "ok", "service": "jev-client"}
+async def health():
+    runtime = runtime_status(); mode = runtime.get("mode")
+    return {"status": "degraded" if mode in {"fallback", "unavailable"} else "ok",
+            "service": "jev-client", "reasoning": runtime}
 class AnalyzeRequest(BaseModel):
     finding: str
     evidence: list[str]

@@ -18,7 +18,8 @@ def _dedupe(doc_id: str) -> bool:
 def _maybe_enrich(event: dict):
     ioc_hits = []
     enrichable_types = {"credential_attack", "malware", "ransomware", "network_attack", "reconnaissance",
-                        "web_attack", "dos_attack", "phishing", "data_exfiltration", "insider_risk", "security_alert"}
+                        "web_attack", "dos_attack", "phishing", "data_exfiltration", "insider_risk", "security_alert",
+                        "vulnerability", "zero_day"}
     should_enrich = (event.get("type") in enrichable_types or event.get("severity") in ("high", "critical")
                      or bool((event.get("raw_kv") or {}).get("security_signal")))
     if should_enrich:

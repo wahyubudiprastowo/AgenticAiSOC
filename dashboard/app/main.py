@@ -46,8 +46,11 @@ async def _ping(name: str, url: str, client: httpx.AsyncClient) -> dict:
         try:
             resp = await client.get(url, timeout=DASHBOARD_HEALTH_TIMEOUT_SECONDS)
             latency_ms = round((time.monotonic() - start) * 1000); ok = resp.status_code < 400
+            try: upstream_status = str(resp.json().get("status") or "").lower()
+            except Exception: upstream_status = ""
+            degraded = upstream_status in {"degraded", "unavailable", "unreachable", "error"}
             if ok: _HEALTH_LAST_GOOD[name] = time.monotonic()
-            return {"name": name, "status": "healthy" if ok else "degraded", "latency_ms": latency_ms,
+            return {"name": name, "status": "degraded" if degraded or not ok else "healthy", "latency_ms": latency_ms,
                     "attempts": attempt + 1, "stale_seconds": 0}
         except (httpx.TimeoutException, httpx.TransportError):
             if attempt == 0: await asyncio.sleep(0.12)
@@ -82,7 +85,7 @@ _SETTING_GROUPS = (
     ("Hermes & AI", "Finding workers, Jev reasoning, model provider, and AI limits.", ("HERMES_", "AI_", "JEV_")),
     ("M365 & Defender XDR", "Microsoft audit and Defender XDR collection.", ("M365_", "DEFENDER_")),
     ("Threat Intelligence", "External intelligence providers, cache, and CYFIRMA feeds.",
-     ("THREAT_INTEL_", "INTEL_", "CYFIRMA_", "VT_", "OTX_", "ABUSEIPDB_", "THREATFOX_",
+     ("THREAT_INTEL_", "INTEL_", "CYFIRMA_", "NVD_", "VT_", "OTX_", "ABUSEIPDB_", "THREATFOX_",
       "URLHAUS_", "CROWDSEC_", "HUDSONROCK_", "RAPIDAPI_")),
     ("Storage & Memory", "PostgreSQL, Redis, Qdrant, and vector-memory configuration.",
      ("DATABASE_", "POSTGRES_", "REDIS_", "QDRANT_")),

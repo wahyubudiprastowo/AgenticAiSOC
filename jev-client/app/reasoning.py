@@ -1,5 +1,5 @@
 from __future__ import annotations
-import json, logging, os, re
+import json, logging, os, re, threading, time
 from pathlib import Path
 logger = logging.getLogger("jev-client.reasoning")
 AI_PROVIDER_BASE_URL = os.getenv("AI_PROVIDER_BASE_URL", os.getenv("AI_BASE_URL", "http://jev:20128"))
@@ -23,6 +23,13 @@ _CLASSIFICATION_BY_CATEGORY = {"credential_attack": "Credential Attack", "malwar
     "data_exfiltration": "Data Exfiltration", "apt_activity": "APT Activity", "zero_day": "Zero-Day Exploitation",
     "cloud_native": "Cloud-Native Attack", "container_kubernetes": "Container/Kubernetes Threat"}
 REQUIRED_KEYS = {"threat_classification", "mitre_technique", "confidence", "investigation_recommendation", "severity", "based_on"}
+_RUNTIME_LOCK = threading.Lock()
+_RUNTIME = {"mode": "untested", "last_checked": None, "last_error": None}
+def runtime_status() -> dict:
+    with _RUNTIME_LOCK: return dict(_RUNTIME)
+def _record_runtime(mode: str, error: str | None = None) -> None:
+    with _RUNTIME_LOCK:
+        _RUNTIME.update({"mode": mode, "last_checked": time.time(), "last_error": error})
 def _mock_reasoning(evidence: dict) -> dict:
     finding_text = (evidence.get("finding") or "").lower(); all_text = finding_text + " " + " ".join(evidence.get("evidence", [])).lower()
     evidence_ids = [e.split(":")[0].strip() if ":" in e else e for e in evidence.get("evidence", [])]
@@ -70,6 +77,7 @@ def _call_remote_jev(evidence: dict) -> dict:
     if AI_API_KEY: headers["Authorization"] = f"Bearer {AI_API_KEY}"
     payload = {"model": AI_MODEL, "max_tokens": AI_MAX_TOKENS, "messages": [{"role": "system", "content": SYSTEM_PROMPT}, {"role": "user", "content": json.dumps(evidence)}]}
     base = AI_PROVIDER_BASE_URL.rstrip("/")
+    errors = []
     for url in [f"{base}/chat/completions", base]:
         try:
             with httpx.Client(timeout=AI_TIMEOUT) as client:
@@ -79,10 +87,23 @@ def _call_remote_jev(evidence: dict) -> dict:
                       data.get("response") if isinstance(data, dict) and "response" in data else json.dumps(data)
             parsed = _extract_json_from_text(content) if isinstance(content, str) else content
             if parsed and _validate_schema(parsed): return parsed
-        except Exception: continue
-    raise RuntimeError("All 9router endpoint candidates failed")
+            errors.append("invalid response schema")
+        except httpx.HTTPStatusError as exc:
+            message = ""
+            try: message = str((exc.response.json().get("error") or {}).get("message") or "")
+            except Exception: pass
+            errors.append(f"HTTP {exc.response.status_code}" + (f": {message[:160]}" if message else ""))
+        except Exception as exc: errors.append(type(exc).__name__)
+    raise RuntimeError("; ".join(errors) or "all upstream endpoint candidates failed")
 def analyze(evidence: dict) -> dict:
-    if JEV_FALLBACK_MODE == "force_mock": return _mock_reasoning(evidence)
-    if JEV_FALLBACK_MODE == "force_remote": return _call_remote_jev(evidence)
-    try: return _call_remote_jev(evidence)
-    except Exception: return _mock_reasoning(evidence)
+    if JEV_FALLBACK_MODE == "force_mock":
+        result = _mock_reasoning(evidence); result["reasoning_mode"] = "fallback"
+        _record_runtime("fallback", "forced by JEV_FALLBACK_MODE"); return result
+    try:
+        result = _call_remote_jev(evidence); result["reasoning_mode"] = "remote"
+        _record_runtime("remote"); return result
+    except Exception as exc:
+        _record_runtime("unavailable" if JEV_FALLBACK_MODE == "force_remote" else "fallback", str(exc)[:300])
+        if JEV_FALLBACK_MODE == "force_remote": raise
+        result = _mock_reasoning(evidence); result["reasoning_mode"] = "fallback"
+        result["fallback_reason"] = str(exc)[:300]; return result

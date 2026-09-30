@@ -111,7 +111,13 @@ def attack_detail(finding: dict, events: list[dict]) -> dict:
                 "verdict_reason": indicator.get("verdict_reason"),
                 "providers": [{"name": p.get("name"), "mode": p.get("mode"),
                     "malicious": bool(p.get("malicious")), "score": float(p.get("score") or 0),
-                    "detail": p.get("detail")} for p in providers if isinstance(p, dict)]}
+                    "detail": p.get("detail"), "cvss_score": p.get("cvss_score"),
+                    "cvss_severity": p.get("cvss_severity"), "cvss_version": p.get("cvss_version"),
+                    "vuln_status": p.get("vuln_status"), "published": p.get("published"),
+                    "last_modified": p.get("last_modified"), "cisa_kev": p.get("cisa_kev"),
+                    "cisa_exploit_add": p.get("cisa_exploit_add"), "patch_reference": p.get("patch_reference"),
+                    "weaknesses": p.get("weaknesses") or [], "source_url": p.get("source_url")}
+                    for p in providers if isinstance(p, dict)]}
         normalized_indicators.append(item)
         if item["ioc_type"] == "cve": cves.append(str(item["ioc"]).upper())
     cve_pattern = re.compile(r"CVE-\d{4}-\d{4,8}", re.IGNORECASE)

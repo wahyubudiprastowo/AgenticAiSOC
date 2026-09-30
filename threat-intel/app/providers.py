@@ -1,5 +1,5 @@
 from __future__ import annotations
-import base64, hashlib, logging, os, threading, time
+import base64, hashlib, logging, os, re, threading, time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Optional
 import httpx
@@ -14,14 +14,18 @@ CROWDSEC_ENABLED = os.getenv("CROWDSEC_ENABLED", "true").lower() == "true"; CROW
 CROWDSEC_CTI_BASE_URL = os.getenv("CROWDSEC_CTI_BASE_URL", "https://cti.api.crowdsec.net/v2")
 CYFIRMA_ENABLED = os.getenv("CYFIRMA_ENABLED", "true").lower() == "true"
 CYFIRMA_BASE_URL = os.getenv("CYFIRMA_BASE_URL", "https://api.cyfirma.com"); CYFIRMA_API_KEY = os.getenv("CYFIRMA_API_KEY", "")
+CYFIRMA_API_KEY_HEADER = os.getenv("CYFIRMA_API_KEY_HEADER", "x-api-key")
 CYFIRMA_TAILORED_IOC_PATH = os.getenv("CYFIRMA_TAILORED_IOC_PATH", "/api/ex/v3/da/stix/2.1/indicators/tailored")
 CYFIRMA_GLOBAL_IOC_PATH = os.getenv("CYFIRMA_GLOBAL_IOC_PATH", "/api/ex/v3/da/stix/2.1/indicators/all")
 CYFIRMA_VERIFY_SSL = os.getenv("CYFIRMA_VERIFY_SSL", "true").lower() == "true"
 CYFIRMA_CACHE_TTL = int(os.getenv("CYFIRMA_CACHE_TTL", "1800")); CYFIRMA_MAX_PAGES = int(os.getenv("CYFIRMA_MAX_PAGES", "10"))
 CYFIRMA_MAX_SECONDS = int(os.getenv("CYFIRMA_MAX_SECONDS", "90"))
+CYFIRMA_ERROR_BACKOFF_SECONDS = int(os.getenv("CYFIRMA_ERROR_BACKOFF_SECONDS", "300"))
+NVD_ENABLED = os.getenv("NVD_ENABLED", "true").lower() == "true"; NVD_API_KEY = os.getenv("NVD_API_KEY", "")
+NVD_CVE_API_URL = os.getenv("NVD_CVE_API_URL", "https://services.nvd.nist.gov/rest/json/cves/2.0")
 INTEL_PROVIDER_WORKERS = max(1, int(os.getenv("INTEL_PROVIDER_WORKERS", "6")))
 _PROVIDER_EXECUTOR = ThreadPoolExecutor(max_workers=INTEL_PROVIDER_WORKERS, thread_name_prefix="intel-provider")
-_cyfirma_feed_cache = {"fetched_at": 0.0, "indicators": set()}
+_cyfirma_feed_cache = {"fetched_at": 0.0, "last_attempt": 0.0, "last_error": None, "indicators": set()}
 _cyfirma_refresh_lock = threading.Lock()
 _provider_runtime: dict[str, dict] = {}
 _provider_runtime_lock = threading.Lock()
@@ -85,6 +89,57 @@ def check_otx(ioc, ioc_type):
             if detail: result["detail"] = detail
             return result
     except Exception as exc: return _mock_or_unavailable("otx", ioc, _error_detail(exc))
+def _nvd_result(ioc: str, payload: dict) -> dict:
+    vulnerabilities = payload.get("vulnerabilities") or []
+    if not vulnerabilities:
+        return {"name": "nvd", "malicious": False, "score": 0.0, "mode": "live",
+                "detail": "CVE not found in NVD", "record_status": "not_found"}
+    cve = (vulnerabilities[0] or {}).get("cve") or {}
+    metrics = cve.get("metrics") or {}
+    metric = None
+    metric_version = None
+    for key, version in (("cvssMetricV40", "4.0"), ("cvssMetricV31", "3.1"),
+                         ("cvssMetricV30", "3.0"), ("cvssMetricV2", "2.0")):
+        entries = metrics.get(key) or []
+        if entries:
+            metric = next((entry for entry in entries if entry.get("type") == "Primary"), entries[0])
+            metric_version = version
+            break
+    cvss_data = (metric or {}).get("cvssData") or {}
+    cvss_score = cvss_data.get("baseScore")
+    severity = ((metric or {}).get("baseSeverity") or cvss_data.get("baseSeverity") or "unknown").lower()
+    references = cve.get("references") or []
+    patch_reference = any("Patch" in (reference.get("tags") or []) for reference in references)
+    weaknesses = []
+    for weakness in cve.get("weaknesses") or []:
+        for description in weakness.get("description") or []:
+            value = description.get("value")
+            if value and value not in weaknesses: weaknesses.append(value)
+    cisa_kev = bool(cve.get("cisaExploitAdd"))
+    detail_parts = []
+    if cvss_score is not None: detail_parts.append(f"CVSS {metric_version} {cvss_score} {severity}")
+    if cisa_kev: detail_parts.append("CISA KEV listed")
+    if patch_reference: detail_parts.append("NVD patch reference present")
+    detail_parts.append(f"status {cve.get('vulnStatus') or 'unknown'}")
+    return {"name": "nvd", "malicious": False,
+            "score": round(float(cvss_score or 0) / 10.0, 3), "mode": "live",
+            "detail": " · ".join(detail_parts), "record_status": "found",
+            "cvss_score": cvss_score, "cvss_severity": severity, "cvss_version": metric_version,
+            "vuln_status": cve.get("vulnStatus"), "published": cve.get("published"),
+            "last_modified": cve.get("lastModified"), "cisa_kev": cisa_kev,
+            "cisa_exploit_add": cve.get("cisaExploitAdd"), "patch_reference": patch_reference,
+            "weaknesses": weaknesses[:8], "source_url": f"https://nvd.nist.gov/vuln/detail/{ioc.upper()}"}
+def check_nvd(ioc, ioc_type):
+    if not NVD_ENABLED or ioc_type != "cve":
+        return {"name": "nvd", "malicious": False, "score": 0.0, "mode": "disabled"}
+    headers = {"apiKey": NVD_API_KEY} if NVD_API_KEY else {}
+    try:
+        with httpx.Client(timeout=15) as client:
+            response = client.get(NVD_CVE_API_URL, params={"cveId": ioc.upper()}, headers=headers)
+            response.raise_for_status()
+            return _nvd_result(ioc, response.json())
+    except Exception as exc:
+        return _mock_or_unavailable("nvd", ioc, _error_detail(exc))
 def check_threatfox(ioc, ioc_type):
     if not THREATFOX_ENABLED: return {"name": "threatfox", "malicious": False, "score": 0.0, "mode": "disabled"}
     try:
@@ -125,15 +180,23 @@ def check_crowdsec_watchlist(ioc):
     watchlist = [ip.strip() for ip in os.getenv("CROWDSEC_WATCHLIST_IPS", "").split(",") if ip.strip()]
     if ioc in watchlist: return {"name": "crowdsec_watchlist", "malicious": True, "score": 0.99, "mode": "live", "detail": "IP in watchlist"}
     return None
+_STIX_VALUE_RE = re.compile(r"=\s*'((?:\\.|[^'])*)'")
+def _cyfirma_headers() -> dict[str, str]:
+    if CYFIRMA_API_KEY_HEADER.lower() == "authorization":
+        return {"Authorization": f"Bearer {CYFIRMA_API_KEY}"}
+    return {CYFIRMA_API_KEY_HEADER: CYFIRMA_API_KEY}
+def _extract_stix_pattern_values(pattern: str) -> set[str]:
+    """Extract every literal from a STIX pattern, including compound OR patterns."""
+    return {value.replace("\\'", "'").replace("\\\\", "\\").strip()
+            for value in _STIX_VALUE_RE.findall(pattern or "") if value.strip()}
 def _fetch_cyfirma_indicators(path, deadline):
     indicators = set(); url = f"{CYFIRMA_BASE_URL.rstrip('/')}{path}"; params = {}; page = 0
     with httpx.Client(timeout=30, verify=CYFIRMA_VERIFY_SSL) as client:
         while page < CYFIRMA_MAX_PAGES and time.time() < deadline:
-            resp = client.get(url, headers={"Authorization": f"Bearer {CYFIRMA_API_KEY}"}, params=params)
+            resp = client.get(url, headers=_cyfirma_headers(), params=params)
             resp.raise_for_status(); data = resp.json()
             for obj in data.get("objects", []):
-                pattern = obj.get("pattern", "")
-                if "=" in pattern: indicators.add(pattern.split("=", 1)[1].strip(" ]'\""))
+                indicators.update(_extract_stix_pattern_values(obj.get("pattern", "")))
             page += 1; next_cursor = data.get("next") or data.get("more")
             if not next_cursor: break
             params = {"next": next_cursor}
@@ -148,13 +211,22 @@ def _refresh_cyfirma_feed_locked():
     now = time.time()
     if _cyfirma_feed_cache["indicators"] and (now - _cyfirma_feed_cache["fetched_at"]) < CYFIRMA_CACHE_TTL: return _cyfirma_feed_cache["indicators"]
     if not CYFIRMA_API_KEY: return _cyfirma_feed_cache["indicators"]
+    if (now - float(_cyfirma_feed_cache["last_attempt"] or 0)) < CYFIRMA_ERROR_BACKOFF_SECONDS:
+        return _cyfirma_feed_cache["indicators"]
+    _cyfirma_feed_cache["last_attempt"] = now
     deadline = now + CYFIRMA_MAX_SECONDS; merged = set()
+    errors = []
     try: merged |= _fetch_cyfirma_indicators(CYFIRMA_TAILORED_IOC_PATH, deadline)
-    except Exception: pass
+    except Exception as exc: errors.append(f"tailored: {_error_detail(exc)}")
     try:
         if time.time() < deadline: merged |= _fetch_cyfirma_indicators(CYFIRMA_GLOBAL_IOC_PATH, deadline)
-    except Exception: pass
-    if merged: _cyfirma_feed_cache["indicators"] = merged; _cyfirma_feed_cache["fetched_at"] = now
+    except Exception as exc: errors.append(f"global: {_error_detail(exc)}")
+    if merged:
+        _cyfirma_feed_cache["indicators"] = merged
+        _cyfirma_feed_cache["fetched_at"] = now
+        _cyfirma_feed_cache["last_error"] = None
+    elif errors:
+        _cyfirma_feed_cache["last_error"] = "; ".join(errors)
     return _cyfirma_feed_cache["indicators"]
 def warm_cyfirma_feed() -> None:
     if CYFIRMA_ENABLED and CYFIRMA_API_KEY: _refresh_cyfirma_feed()
@@ -166,7 +238,7 @@ def check_cyfirma(ioc, ioc_type):
         age = time.time() - float(_cyfirma_feed_cache["fetched_at"] or 0)
         if not indicators:
             threading.Thread(target=warm_cyfirma_feed, daemon=True).start()
-            return _unavailable_result("cyfirma", "IOC feed is warming or unavailable")
+            return _unavailable_result("cyfirma", _cyfirma_feed_cache.get("last_error") or "IOC feed is warming")
         if age >= CYFIRMA_CACHE_TTL:
             threading.Thread(target=warm_cyfirma_feed, daemon=True).start()
         found = ioc in indicators
@@ -179,7 +251,7 @@ PROVIDERS_BY_TYPE = {
     "domain": [check_virustotal, check_otx, check_urlhaus, check_cyfirma],
     "hash": [check_virustotal, check_otx, check_cyfirma],
     "url": [check_virustotal, check_urlhaus, check_threatfox, check_cyfirma],
-    "cve": [check_otx],
+    "cve": [check_nvd, check_otx],
 }
 def run_all_providers(ioc, ioc_type):
     results = []
@@ -212,6 +284,7 @@ def provider_statuses() -> dict:
         "otx": (OTX_ENABLED, bool(OTX_API_KEY)), "threatfox": (THREATFOX_ENABLED, bool(THREATFOX_API_KEY)),
         "urlhaus": (URLHAUS_ENABLED, bool(URLHAUS_API_KEY)), "crowdsec": (CROWDSEC_ENABLED, bool(CROWDSEC_API_KEY)),
         "cyfirma": (CYFIRMA_ENABLED, bool(CYFIRMA_API_KEY)),
+        "nvd": (NVD_ENABLED, bool(NVD_API_KEY)),
     }
     output = {}
     for name, (enabled, has_key) in configured.items():
