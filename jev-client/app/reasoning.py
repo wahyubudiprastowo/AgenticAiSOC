@@ -19,6 +19,7 @@ from shared.taxonomy import (
     valid_mitre,
 )
 from .schemas import AIAnalysis, AnalyzeRequest
+from .circuit import RemoteCircuitBreaker
 
 
 logger = logging.getLogger("jev-client.reasoning")
@@ -33,7 +34,7 @@ _PROMPT_PATH = Path(os.getenv("JEV_SYSTEM_PROMPT_PATH", "/app/prompts/jev_system
 _RUNTIME_LOCK = threading.Lock()
 _RUNTIME = {"mode": "untested", "last_checked": None, "last_error": None,
             "schema_version": 2, "taxonomy_version": taxonomy_version()}
-_BACKOFF_UNTIL = 0.0
+_CIRCUIT = RemoteCircuitBreaker(JEV_FAILURE_BACKOFF)
 
 
 def _load_system_prompt() -> str:
@@ -45,12 +46,25 @@ SYSTEM_PROMPT = _load_system_prompt()
 
 
 def runtime_status() -> dict:
-    with _RUNTIME_LOCK: return dict(_RUNTIME)
+    with _RUNTIME_LOCK:
+        runtime = dict(_RUNTIME)
+    runtime.update(_CIRCUIT.snapshot())
+    return runtime
 
 
 def _record_runtime(mode: str, error: str | None = None) -> None:
     with _RUNTIME_LOCK:
         _RUNTIME.update({"mode": mode, "last_checked": time.time(), "last_error": error})
+
+
+def _fallback(request: AnalyzeRequest, reason: str) -> dict:
+    _record_runtime("fallback", reason)
+    result = _local_reasoning(request)
+    result["verdict"] = "unavailable"
+    result["confidence"] = 0.0
+    result["reasoning_mode"] = "fallback"
+    result["fallback_reason"] = reason
+    return result
 
 
 def _evidence_ids(request: AnalyzeRequest) -> set[str]:
@@ -147,30 +161,27 @@ def _call_remote_jev(request: AnalyzeRequest) -> dict:
 
 
 def analyze(evidence: dict | AnalyzeRequest) -> dict:
-    global _BACKOFF_UNTIL
     request = evidence if isinstance(evidence, AnalyzeRequest) else AnalyzeRequest.model_validate(evidence)
     if JEV_FALLBACK_MODE == "force_mock":
         result = _local_reasoning(request)
         result["reasoning_mode"] = "fallback"
         _record_runtime("fallback", "forced by JEV_FALLBACK_MODE")
         return result
+    allowed, circuit_reason = _CIRCUIT.begin()
+    if not allowed:
+        if JEV_FALLBACK_MODE == "force_remote":
+            _record_runtime("unavailable", circuit_reason)
+            raise RuntimeError(circuit_reason)
+        return _fallback(request, circuit_reason or "upstream circuit unavailable")
     try:
-        remaining = _BACKOFF_UNTIL - time.monotonic()
-        if remaining > 0:
-            raise RuntimeError(f"upstream circuit open for {remaining:.1f}s after the previous failure")
         result = _call_remote_jev(request)
-        _BACKOFF_UNTIL = 0.0
+        _CIRCUIT.finish(True)
         result["reasoning_mode"] = "remote"
         _record_runtime("remote")
         return result
     except Exception as exc:
+        _CIRCUIT.finish(False)
         error = str(exc)[:300]
-        _BACKOFF_UNTIL = time.monotonic() + JEV_FAILURE_BACKOFF
         _record_runtime("unavailable" if JEV_FALLBACK_MODE == "force_remote" else "fallback", error)
         if JEV_FALLBACK_MODE == "force_remote": raise
-        result = _local_reasoning(request)
-        result["verdict"] = "unavailable"
-        result["confidence"] = 0.0
-        result["reasoning_mode"] = "fallback"
-        result["fallback_reason"] = error
-        return result
+        return _fallback(request, error)

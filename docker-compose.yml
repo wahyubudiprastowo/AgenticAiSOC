@@ -48,6 +48,8 @@ services:
       dockerfile: soc-core/Dockerfile
     container_name: agentic-soc-core
     env_file: .env
+    environment:
+      - THREAT_INTEL_URL=http://threat-intel:8005
     ports:
       - "${SOC_CORE_HOST_PORT:-48200}:18200"
     depends_on:

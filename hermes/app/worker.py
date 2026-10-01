@@ -94,12 +94,21 @@ def _build_evidence_object(event: dict, triage: dict, investigation: dict,
         evidence_lines.append(f"CHAIN-1: {chain_summary}")
         evidence_items.append({"id": "CHAIN-1", "kind": "correlation", "summary": chain_summary,
                                "attributes": {"steps": investigation["attack_chain"]}})
+    raw_kv = event.get("raw_kv") or {}
+    if raw_kv.get("incident_key"):
+        correlation_summary = (
+            f"M365 incident correlation scope={raw_kv.get('incident_scope') or 'message'}; "
+            f"window={raw_kv.get('incident_window_seconds') or 'unknown'} seconds"
+        )
+        evidence_lines.append(f"CORR-1: {correlation_summary}")
+        evidence_items.append({"id": "CORR-1", "kind": "correlation", "summary": correlation_summary,
+                               "attributes": {"scope": raw_kv.get("incident_scope"),
+                                              "window_seconds": raw_kv.get("incident_window_seconds")}})
     if attribution:
         summary = f"Threat-actor reporting from providers: {', '.join(attribution['providers'])}"
         evidence_lines.append(f"ATTRIBUTION-1: {summary}")
         evidence_items.append({"id": "ATTRIBUTION-1", "kind": "attribution", "summary": summary,
                                "attributes": attribution})
-    raw_kv = event.get("raw_kv") or {}
     deterministic = event.get("detection") or None
     return {
         "finding": description,
@@ -113,6 +122,9 @@ def _build_evidence_object(event: dict, triage: dict, investigation: dict,
         "indicators": indicators,
         "deterministic_detection": deterministic,
         "attribution": attribution,
+        "correlation": ({"key": raw_kv.get("incident_key"), "scope": raw_kv.get("incident_scope"),
+                         "event_count": raw_kv.get("correlation_count") or 1}
+                        if raw_kv.get("incident_key") else None),
         "event": {
             "source": event.get("source"), "type": event.get("type"),
             "severity": event.get("severity"), "action": event.get("action"),
@@ -251,10 +263,17 @@ def _process_filtered_event(event: dict) -> None:
 def orchestration_loop() -> None:
     while True:
         try:
-            event = redis_client.blocking_pop_filtered_event(timeout=5)
-            if event is None:
+            claimed = redis_client.blocking_claim_filtered_event(timeout=5)
+            if claimed is None:
                 continue
-            _process_filtered_event(event)
+            event, payload = claimed
+            try:
+                _process_filtered_event(event)
+            except Exception:
+                logger.exception("Filtered event processing failed")
+                logger.warning("Filtered event queue outcome=%s", redis_client.retry_filtered_event(payload))
+            else:
+                redis_client.ack_filtered_event(payload)
         except Exception:
             logger.exception("orchestration_loop error")
             time.sleep(2)

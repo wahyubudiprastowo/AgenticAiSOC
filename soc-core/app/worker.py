@@ -8,6 +8,7 @@ WAZUH_FIM_POLL_INTERVAL_SECONDS = int(os.getenv("WAZUH_FIM_POLL_INTERVAL_SECONDS
 WAZUH_VULN_POLL_INTERVAL_SECONDS = int(os.getenv("WAZUH_VULN_POLL_INTERVAL_SECONDS", "900"))
 SOC_MAX_IOCS_PER_EVENT = int(os.getenv("SOC_MAX_IOCS_PER_EVENT", "8"))
 SOC_IOC_ENRICH_WORKERS = max(1, int(os.getenv("SOC_IOC_ENRICH_WORKERS", "4")))
+SOC_RAW_EVENT_WORKERS = max(1, int(os.getenv("SOC_RAW_EVENT_WORKERS", "4")))
 _IOC_ENRICH_EXECUTOR = ThreadPoolExecutor(max_workers=SOC_IOC_ENRICH_WORKERS, thread_name_prefix="ioc-enrich")
 _seen_ids: set[str] = set()
 def _dedupe(doc_id: str) -> bool:
@@ -41,11 +42,24 @@ def _maybe_enrich(event: dict):
     return ioc_hits, bool(event.get("mitre_technique"))
 def process_event(event: dict) -> str:
     existing = db.find_duplicate_event(event)
-    if existing: return existing
+    if existing and db.event_pipeline_status(existing) == "complete": return existing
     event["is_filtered_in"] = False
-    event_uuid, inserted = db.insert_event(event)
-    if not inserted: return event_uuid
+    if existing:
+        event_uuid = existing
+    else:
+        event_uuid, inserted = db.insert_event(event)
+        if not inserted and db.event_pipeline_status(event_uuid) == "complete": return event_uuid
     correlation.apply(event)
+    incident_key = str((event.get("raw_kv") or {}).get("incident_key") or "")
+    if incident_key:
+        attached_finding = db.attach_event_to_correlated_finding(incident_key, event_uuid, event)
+        if attached_finding:
+            event["is_filtered_in"] = True
+            event["raw_kv"]["incident_aggregated"] = True
+            event["raw_kv"]["incident_finding_id"] = attached_finding
+            db.update_event_decision(event_uuid, event)
+            db.mark_event_complete(event_uuid)
+            return event_uuid
     ioc_hits, mitre_matched = _maybe_enrich(event)
     event["ioc_hits"] = ioc_hits
     forward = filters.should_forward_to_ai(event, ioc_hits=ioc_hits, mitre_matched=mitre_matched)
@@ -56,19 +70,31 @@ def process_event(event: dict) -> str:
         detection = detections.classify(event, ioc_hits=ioc_hits)
         if detection:
             enriched["detection"] = detection
-            enriched["finding_id"] = db.insert_deterministic_finding(event_uuid, event, detection, ioc_hits)
+            enriched["finding_id"], finding_created = db.insert_deterministic_finding(
+                event_uuid, event, detection, ioc_hits
+            )
             db.upsert_finding_indicators(enriched["finding_id"], event_uuid, ioc_hits)
+            if incident_key and not finding_created:
+                event["raw_kv"]["incident_aggregated"] = True
+                db.update_event_decision(event_uuid, event)
+                db.mark_event_complete(event_uuid)
+                return event_uuid
         redis_client.push_filtered_event(enriched)
+    db.mark_event_complete(event_uuid)
     return event_uuid
-def _process_event(event: dict) -> None:
-    try: process_event(event)
-    except Exception: logger.exception("Failed to process event")
+def _process_event(event: dict) -> bool:
+    try:
+        process_event(event); return True
+    except Exception:
+        logger.exception("Failed to process event"); return False
 def raw_event_loop() -> None:
     while True:
         try:
-            event = redis_client.blocking_pop_raw_event(timeout=5)
-            if event is None: continue
-            _process_event(event)
+            claimed = redis_client.blocking_claim_raw_event(timeout=5)
+            if claimed is None: continue
+            event, payload = claimed
+            if _process_event(event): redis_client.ack_raw_event(payload)
+            else: logger.warning("Raw event queue outcome=%s", redis_client.retry_raw_event(payload))
         except Exception: logger.exception("raw_event_loop error"); time.sleep(2)
 def wazuh_alerts_loop() -> None:
     while True:
@@ -76,7 +102,7 @@ def wazuh_alerts_loop() -> None:
             for alert in wazuh_client.fetch_recent_alerts():
                 doc_id = f"alert-{alert.get('_id', '')}"
                 if not _dedupe(doc_id): continue
-                _process_event(wazuh_client.wazuh_alert_to_normalized(alert))
+                if not _process_event(wazuh_client.wazuh_alert_to_normalized(alert)): _seen_ids.discard(doc_id)
         except Exception: logger.exception("wazuh_alerts_loop error")
         time.sleep(WAZUH_POLL_INTERVAL_SECONDS)
 def wazuh_fim_loop() -> None:
@@ -85,7 +111,7 @@ def wazuh_fim_loop() -> None:
             for fim in wazuh_client.fetch_recent_fim_events():
                 doc_id = f"fim-{fim.get('_id', '')}"
                 if not _dedupe(doc_id): continue
-                _process_event(wazuh_client.wazuh_fim_to_normalized(fim))
+                if not _process_event(wazuh_client.wazuh_fim_to_normalized(fim)): _seen_ids.discard(doc_id)
         except Exception: logger.exception("wazuh_fim_loop error")
         time.sleep(WAZUH_FIM_POLL_INTERVAL_SECONDS)
 def wazuh_vuln_loop() -> None:
@@ -94,6 +120,6 @@ def wazuh_vuln_loop() -> None:
             for vuln in wazuh_client.fetch_recent_vulnerabilities():
                 doc_id = f"vuln-{vuln.get('_id', '')}"
                 if not _dedupe(doc_id): continue
-                _process_event(wazuh_client.wazuh_vulnerability_to_normalized(vuln))
+                if not _process_event(wazuh_client.wazuh_vulnerability_to_normalized(vuln)): _seen_ids.discard(doc_id)
         except Exception: logger.exception("wazuh_vuln_loop error")
         time.sleep(WAZUH_VULN_POLL_INTERVAL_SECONDS)

@@ -159,6 +159,7 @@ def wazuh_alert_to_normalized(alert):
             "description": description, "mitre_technique": mitre,
             "time": src.get("@timestamp", datetime.now(timezone.utc).isoformat()), "raw": src, "raw_hash": _document_hash(alert),
             "raw_kv": {"wazuh_rule_id": rule.get("id"), "wazuh_rule_level": level, "wazuh_rule_groups": groups,
+                       "source_provenance": "wazuh_indexer",
                        "security_signal": level >= 7 or alert_type in {"credential_attack", "malware", "ransomware",
                            "network_attack", "reconnaissance", "web_attack", "dos_attack"}}}
 def wazuh_fim_to_normalized(event):
@@ -169,6 +170,7 @@ def wazuh_fim_to_normalized(event):
             "destination": src.get("agent", {}).get("name"), "description": f"FIM: {syscheck.get('event', 'change')} on {path}",
             "mitre_technique": rule.get("mitre", {}).get("id", []), "time": src.get("@timestamp", datetime.now(timezone.utc).isoformat()),
             "raw": src, "raw_hash": _document_hash(event), "raw_kv": {"fim_path": path, "fim_event": syscheck.get("event"),
+            "source_provenance": "wazuh_indexer",
             "wazuh_rule_id": rule.get("id"), "wazuh_rule_level": level, "wazuh_rule_groups": rule.get("groups", []) or []}}
 def wazuh_vulnerability_to_normalized(vuln):
     src = vuln.get("_source", vuln); v = src.get("vulnerability", {}); sev = (v.get("severity") or "medium").lower()
@@ -189,5 +191,6 @@ def wazuh_vulnerability_to_normalized(vuln):
             "time": v.get("detected_at") or src.get("@timestamp", datetime.now(timezone.utc).isoformat()), "raw": src,
             "raw_hash": _document_hash(vuln),
             "raw_kv": {"cve": cve, "package": package, "condition": condition, "is_unfixed": is_unfixed,
+                       "source_provenance": "wazuh_indexer",
                        "is_zero_day": is_zero_day, "under_evaluation": bool(v.get("under_evaluation")),
                        "cvss_score": (v.get("score") or {}).get("base")}}

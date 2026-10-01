@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 from datetime import datetime, timezone
 
 
@@ -21,6 +22,7 @@ OPERATION_PROFILES: dict[str, dict] = {
 }
 
 DOWNLOAD_OPERATIONS = {"FileDownloaded", "FileSyncDownloadedFull", "FileDownloadedFromBrowser"}
+M365_INCIDENT_WINDOW_SECONDS = max(300, int(os.getenv("M365_INCIDENT_WINDOW_SECONDS", "3600")))
 
 # AAD codes caused by MFA/Conditional Access are not bad-password attempts.
 EXPECTED_AUTH_INTERRUPTION_CODES = {
@@ -38,6 +40,65 @@ def _stable_event_id(record: dict, raw_hash: str) -> str:
     record_id = str(record.get("Id") or record.get("IntraSystemId") or "").strip()
     identity = f"{record.get('_content_type', '')}:{record_id}" if record_id else raw_hash
     return f"evt-m365-{hashlib.sha256(identity.encode()).hexdigest()[:24]}"
+
+
+def _text_values(value) -> list[str]:
+    if value is None:
+        return []
+    if isinstance(value, list):
+        result = []
+        for item in value:
+            result.extend(_text_values(item))
+        return result
+    if isinstance(value, dict):
+        for key in ("EmailAddress", "Address", "Recipient", "Value", "Name"):
+            if value.get(key):
+                return _text_values(value[key])
+        return []
+    text = str(value).strip()
+    return [text] if text else []
+
+
+def _incident_identity(record: dict, event_type: str) -> dict:
+    """Build a privacy-safe incident key for actionable TIMailData records."""
+    if str(record.get("Operation") or "") != "TIMailData" or event_type not in {"phishing", "malware"}:
+        return {}
+    campaign = str(record.get("CampaignId") or record.get("ThreatClusterId") or "").strip()
+    network_message = str(record.get("NetworkMessageId") or "").strip()
+    internet_message = str(record.get("InternetMessageId") or "").strip()
+    if campaign:
+        scope, anchor = "campaign", campaign
+    elif network_message:
+        scope, anchor = "network_message", network_message
+    elif internet_message:
+        scope, anchor = "internet_message", internet_message
+    else:
+        recipients = sorted(set(_text_values(record.get("Recipients")) +
+                                _text_values(record.get("RecipientEmailAddress")) +
+                                _text_values(record.get("UserId"))))
+        scope = "message_fingerprint"
+        anchor = "|".join([
+            str(record.get("P2Sender") or record.get("P1Sender") or "").strip().lower(),
+            ",".join(value.lower() for value in recipients),
+            str(record.get("Subject") or "").strip().lower(),
+        ])
+    timestamp = record.get("MessageTime") or record.get("CreationTime")
+    try:
+        parsed = datetime.fromisoformat(str(timestamp).replace("Z", "+00:00"))
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=timezone.utc)
+    except (TypeError, ValueError):
+        parsed = datetime.now(timezone.utc)
+    bucket = int(parsed.timestamp()) // M365_INCIDENT_WINDOW_SECONDS
+    digest = hashlib.sha256(f"{event_type}|{scope}|{anchor}|{bucket}".encode()).hexdigest()
+    return {
+        "incident_key": f"m365-ti-{digest[:32]}",
+        "incident_scope": scope,
+        "incident_window_seconds": M365_INCIDENT_WINDOW_SECONDS,
+        "incident_window_start": datetime.fromtimestamp(
+            bucket * M365_INCIDENT_WINDOW_SECONDS, tz=timezone.utc
+        ).isoformat(),
+    }
 
 
 def _profile_for(record: dict) -> dict:
@@ -73,14 +134,22 @@ def normalize_m365_record(record: dict) -> dict:
     raw_hash = _canonical_hash(record)
     creation_time = record.get("CreationTime") or datetime.now(timezone.utc).isoformat()
     record_id = record.get("Id") or record.get("IntraSystemId")
+    recipients = _text_values(record.get("Recipients")) + _text_values(record.get("RecipientEmailAddress"))
+    affected_user = recipients[0] if recipients else record.get("UserId")
+    incident = _incident_identity(record, profile["type"])
+    description = f"{workload}: {operation}"
+    if operation == "TIMailData" and profile["type"] in {"phishing", "malware"}:
+        description = f"{workload}: TIMailData {profile['type']} detection"
     return {
         "id": _stable_event_id(record, raw_hash),
         "source": "m365_audit",
         "type": profile["type"],
         "severity": profile["severity"],
-        "src_ip": record.get("ClientIP") or record.get("ActorIpAddress"),
-        "user_name": record.get("UserId"),
-        "description": f"{workload}: {operation}",
+        "src_ip": record.get("SenderIp") or record.get("ClientIP") or record.get("ActorIpAddress"),
+        "destination": affected_user,
+        "user_name": affected_user,
+        "action": record.get("DeliveryAction") or record.get("PolicyAction"),
+        "description": description,
         "mitre_technique": [],
         "time": creation_time,
         "raw": record,
@@ -98,5 +167,14 @@ def normalize_m365_record(record: dict) -> dict:
             "verdict": record.get("Verdict"),
             "threats": record.get("ThreatsAndDetectionTech"),
             "detection_type": record.get("DetectionType"),
+            "detection_method": record.get("DetectionMethod"),
+            "network_message_id": record.get("NetworkMessageId"),
+            "internet_message_id": record.get("InternetMessageId"),
+            "sender": record.get("P2Sender") or record.get("P1Sender"),
+            "sender_ip": record.get("SenderIp"),
+            "recipients": recipients,
+            "delivery_action": record.get("DeliveryAction"),
+            "source_provenance": "m365_management_activity",
+            **incident,
         },
     }

@@ -18,6 +18,7 @@ _FINDING_LIST_COLUMNS = """
     updated_time, attack_family, attack_subtype, taxonomy_version,
     classification_method, detection_rule_version, evidence_quality,
     attribution_status, ai_verdict, ai_reasoning_mode,
+    correlation_key, correlation_scope, correlation_count, first_seen, last_seen,
     jsonb_build_object(
         'threat_summary', coalesce(ai_result->'threat_summary', '{}'::jsonb)
     ) AS ai_result,
@@ -77,8 +78,16 @@ def _ensure_finding_schema() -> None:
             cur.execute("ALTER TABLE findings ADD COLUMN IF NOT EXISTS attribution_status TEXT NOT NULL DEFAULT 'none'")
             cur.execute("ALTER TABLE findings ADD COLUMN IF NOT EXISTS ai_verdict TEXT")
             cur.execute("ALTER TABLE findings ADD COLUMN IF NOT EXISTS ai_reasoning_mode TEXT")
+            cur.execute("ALTER TABLE findings ADD COLUMN IF NOT EXISTS correlation_key TEXT")
+            cur.execute("ALTER TABLE findings ADD COLUMN IF NOT EXISTS correlation_scope TEXT")
+            cur.execute("ALTER TABLE findings ADD COLUMN IF NOT EXISTS correlation_count INTEGER NOT NULL DEFAULT 1")
+            cur.execute("ALTER TABLE findings ADD COLUMN IF NOT EXISTS first_seen TIMESTAMPTZ")
+            cur.execute("ALTER TABLE findings ADD COLUMN IF NOT EXISTS last_seen TIMESTAMPTZ")
             cur.execute("CREATE INDEX IF NOT EXISTS idx_findings_subtype ON findings (attack_subtype)")
+            cur.execute("ALTER TABLE events ADD COLUMN IF NOT EXISTS pipeline_status TEXT NOT NULL DEFAULT 'complete'")
+            cur.execute("CREATE INDEX IF NOT EXISTS idx_events_pipeline_status ON events (pipeline_status) WHERE pipeline_status <> 'complete'")
             cur.execute("CREATE UNIQUE INDEX IF NOT EXISTS uq_findings_primary_event ON findings (primary_event_id) WHERE primary_event_id IS NOT NULL")
+            cur.execute("CREATE UNIQUE INDEX IF NOT EXISTS uq_findings_correlation_key ON findings (correlation_key) WHERE correlation_key IS NOT NULL")
             cur.execute("""CREATE TABLE IF NOT EXISTS finding_indicators (
                 id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
                 finding_id UUID NOT NULL REFERENCES findings(id) ON DELETE CASCADE,
@@ -113,10 +122,11 @@ def insert_event(event: dict) -> tuple[str, bool]:
     with get_conn() as conn:
         with conn.cursor() as cur:
             cur.execute("""INSERT INTO events (external_id, source, type, severity, src_ip, dst_ip,
-                    user_name, description, mitre_technique, raw_hash, raw_payload, normalized, is_filtered_in)
+                    user_name, description, mitre_technique, raw_hash, raw_payload, normalized, is_filtered_in,
+                    pipeline_status)
                 VALUES (%(external_id)s, %(source)s, %(type)s, %(severity)s, NULLIF(%(src_ip)s, '')::inet,
                     NULLIF(%(dst_ip)s, '')::inet, %(user_name)s, %(description)s, %(mitre_technique)s,
-                    %(raw_hash)s, %(raw_payload)s, %(normalized)s, %(is_filtered_in)s)
+                    %(raw_hash)s, %(raw_payload)s, %(normalized)s, %(is_filtered_in)s, 'processing')
                 ON CONFLICT DO NOTHING RETURNING id;""", {
                     "external_id": event.get("id"), "source": event.get("source", "unknown"), "type": event.get("type"),
                     "severity": event.get("severity", "low"), "src_ip": _as_ip(event.get("src_ip")), "dst_ip": _as_ip(event.get("destination")),
@@ -154,6 +164,12 @@ def find_duplicate_event(event: dict) -> Optional[str]:
                 cur.execute("SELECT id FROM events WHERE source=%s AND external_id=%s LIMIT 1", (source, external_id))
             row = cur.fetchone(); return str(row[0]) if row else None
 
+def event_pipeline_status(event_id: str) -> str:
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT pipeline_status FROM events WHERE id=%s", (event_id,))
+            row = cur.fetchone(); return str(row[0]) if row else "missing"
+
 def update_event_decision(event_id: str, event: dict) -> None:
     with get_conn() as conn:
         with conn.cursor() as cur:
@@ -162,6 +178,11 @@ def update_event_decision(event_id: str, event: dict) -> None:
                 (event.get("type"), event.get("severity", "low"), event.get("description"),
                  event.get("mitre_technique") or [], json.dumps(event.get("raw_kv", {})),
                  json.dumps(event), event.get("is_filtered_in", False), event_id))
+
+def mark_event_complete(event_id: str) -> None:
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute("UPDATE events SET pipeline_status='complete' WHERE id=%s", (event_id,))
 def list_events(limit=100, severity=None, since_minutes=None) -> list[dict]:
     with get_conn() as conn:
         with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
@@ -177,8 +198,50 @@ def get_event(event_id: str) -> Optional[dict]:
         with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
             cur.execute("SELECT * FROM events WHERE id = %s", (event_id,)); row = cur.fetchone()
             return dict(row) if row else None
-def insert_deterministic_finding(event_id: str, event: dict, detection: dict, ioc_hits: list[dict] | None = None) -> str:
+def _incident_values(event: dict) -> tuple[str | None, str | None, str | None]:
     raw = event.get("raw_kv") or {}
+    key = str(raw.get("incident_key") or "").strip() or None
+    scope = str(raw.get("incident_scope") or "").strip() or None
+    source_time = str(event.get("time") or "").strip() or None
+    return key, scope, source_time
+
+
+def _attach_correlated(cur, correlation_key: str, event_id: str, event: dict) -> str | None:
+    max_events = max(1, int(os.getenv("M365_INCIDENT_MAX_LINKED_EVENTS", "100")))
+    _, _, source_time = _incident_values(event)
+    cur.execute("""UPDATE findings SET
+            event_ids=CASE WHEN %s::uuid=ANY(event_ids) OR cardinality(event_ids)>=%s
+                THEN event_ids ELSE array_append(event_ids,%s::uuid) END,
+            correlation_count=CASE WHEN %s::uuid=ANY(event_ids)
+                THEN correlation_count ELSE correlation_count+1 END,
+            first_seen=LEAST(coalesce(first_seen,created_time),coalesce(%s::timestamptz,now())),
+            last_seen=GREATEST(coalesce(last_seen,created_time),coalesce(%s::timestamptz,now())),
+            updated_time=now()
+        WHERE correlation_key=%s RETURNING id,correlation_count""",
+        (event_id, max_events, event_id, event_id, source_time, source_time, correlation_key))
+    row = cur.fetchone()
+    if not row:
+        return None
+    finding_id, count = str(row[0]), int(row[1])
+    cur.execute("""UPDATE findings SET evidence=jsonb_set(evidence,'{correlation}',
+            jsonb_build_object('key',correlation_key,'scope',correlation_scope,
+                'event_count',%s,'linked_event_limit',%s),true) WHERE id=%s""",
+        (count, max_events, finding_id))
+    return finding_id
+
+
+def attach_event_to_correlated_finding(correlation_key: str, event_id: str, event: dict) -> str | None:
+    if not correlation_key:
+        return None
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            return _attach_correlated(cur, correlation_key, event_id, event)
+
+
+def insert_deterministic_finding(event_id: str, event: dict, detection: dict,
+                                 ioc_hits: list[dict] | None = None) -> tuple[str, bool]:
+    raw = event.get("raw_kv") or {}
+    correlation_key, correlation_scope, source_time = _incident_values(event)
     indicators = [{"ioc": hit.get("ioc"), "ioc_type": hit.get("ioc_type"),
                    "malicious": bool(hit.get("malicious")), "confidence": float(hit.get("confidence") or 0),
                    "enrichment_status": hit.get("enrichment_status", "unknown"),
@@ -195,7 +258,9 @@ def insert_deterministic_finding(event_id: str, event: dict, detection: dict, io
             "mitre_technique": event.get("mitre_technique") or [], "operation": raw.get("operation"),
             "wazuh_rule_id": raw.get("wazuh_rule_id"), "wazuh_rule_groups": raw.get("wazuh_rule_groups") or [],
             "correlation_count": raw.get("correlation_count"), "test_marker": raw.get("test_marker"),
-            "is_synthetic_test": bool(raw.get("is_synthetic_test"))}}
+            "is_synthetic_test": bool(raw.get("is_synthetic_test"))},
+        "correlation": ({"key": correlation_key, "scope": correlation_scope, "event_count": 1}
+                        if correlation_key else None)}
     ai_result = {"analysis_status": "pending_ai", "deterministic": True,
                  "reason": "Finding persisted before optional Hermes/Jev enrichment"}
     with get_conn() as conn:
@@ -204,23 +269,30 @@ def insert_deterministic_finding(event_id: str, event: dict, detection: dict, io
                     mitre_technique, confidence, severity, evidence, ai_result, recommendation,
                     analysis_status, detection_rule, detection_source, updated_time,
                     attack_family, attack_subtype, taxonomy_version, classification_method,
-                    detection_rule_version, evidence_quality, attribution_status, ai_verdict, ai_reasoning_mode)
+                    detection_rule_version, evidence_quality, attribution_status, ai_verdict, ai_reasoning_mode,
+                    correlation_key, correlation_scope, correlation_count, first_seen, last_seen)
                 VALUES (ARRAY[%s::uuid], %s::uuid, %s, %s, %s, %s, %s, %s, %s, %s,
-                    'pending_ai', %s, 'soc_core', now(), %s, %s, %s, %s, %s, %s, %s, NULL, NULL)
-                ON CONFLICT (primary_event_id) WHERE primary_event_id IS NOT NULL DO NOTHING RETURNING id""",
+                    'pending_ai', %s, 'soc_core', now(), %s, %s, %s, %s, %s, %s, %s, NULL, NULL,
+                    %s, %s, 1, coalesce(%s::timestamptz,now()), coalesce(%s::timestamptz,now()))
+                ON CONFLICT DO NOTHING RETURNING id""",
                 (event_id, event_id, detection["category"], detection["classification"],
                  detection.get("mitre_technique") or event.get("mitre_technique") or [], detection["confidence"],
                  event.get("severity", "low"), json.dumps(evidence), json.dumps(ai_result),
                  detection["recommendation"], detection["rule_id"], detection.get("attack_family"),
                  detection.get("attack_subtype"), detection.get("taxonomy_version"),
                  detection.get("classification_method"), detection.get("rule_version"),
-                 detection.get("evidence_quality"), detection.get("attribution_status", "none")))
+                 detection.get("evidence_quality"), detection.get("attribution_status", "none"),
+                 correlation_key, correlation_scope, source_time, source_time))
             row = cur.fetchone()
-            if row: return str(row[0])
+            if row: return str(row[0]), True
+            if correlation_key:
+                attached = _attach_correlated(cur, correlation_key, event_id, event)
+                if attached:
+                    return attached, False
             cur.execute("SELECT id FROM findings WHERE primary_event_id=%s::uuid", (event_id,))
             existing = cur.fetchone()
             if not existing: raise RuntimeError("deterministic finding conflict without existing row")
-            return str(existing[0])
+            return str(existing[0]), False
 def upsert_finding_indicators(finding_id: str, event_id: str, ioc_hits: list[dict]) -> None:
     if not ioc_hits: return
     with get_conn() as conn:

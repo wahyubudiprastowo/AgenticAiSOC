@@ -11,7 +11,7 @@ chmod 600 .env
 ./scripts/verify_environment.sh
 docker compose up -d --build
 ./scripts/smoke_test.sh
-python3 scripts/audit_verify.py      # expect: 77 PASS / 0 WARN / 0 FAIL
+python3 scripts/audit_verify.py      # expect: 92 PASS / 0 WARN / 0 FAIL
 ./scripts/simulate_events.sh all
 ```
 Open **http://localhost:38080** for the dashboard.
@@ -146,6 +146,17 @@ may add evidence and Jev may return an advisory verdict, but fallback or remote
 AI cannot overwrite those canonical values. When the remote Jev provider is
 unavailable, `ai_verdict=unavailable` and `ai_reasoning_mode=fallback` remain
 visible instead of being presented as successful remote reasoning.
+Jev's upstream circuit uses a fixed cooldown: traffic received while it is open
+does not extend the deadline. After cooldown, one half-open probe tests the
+remote provider; success closes the circuit and failure starts a new cooldown.
+The health response exposes `circuit_state` and `retry_after_seconds`.
+
+Raw and filtered Redis queues use atomic claim-to-processing moves, explicit
+ACK, bounded retry, dead-letter queues, and startup recovery of unacknowledged
+items. `SOC_RAW_EVENT_WORKERS` bounds concurrent raw-event consumers; provider
+fan-out remains independently bounded by `SOC_IOC_ENRICH_WORKERS` and
+`INTEL_PROVIDER_WORKERS`. Queue depth, in-flight count, and dead-letter count
+are exposed in the service statistics endpoints.
 
 ## Canonical taxonomy and historical findings
 
@@ -173,6 +184,12 @@ one event cannot create an unbounded request fan-out. The process-wide limits
 are `SOC_IOC_ENRICH_WORKERS` for SOC-to-intel calls and
 `INTEL_PROVIDER_WORKERS` for outbound provider calls; they remain fixed even
 when multiple collector loops process events at the same time.
+
+Repeated provider failures open a per-provider circuit after
+`INTEL_PROVIDER_CIRCUIT_FAILURE_THRESHOLD` failures for
+`INTEL_PROVIDER_CIRCUIT_COOLDOWN_SECONDS`. An open circuit remains an explicit
+`unavailable` result and is never converted to a clean IOC verdict. NVD and the
+locally cached CYFIRMA feed retain their dedicated rate/cache controls.
 
 Every checked indicator is linked to the deterministic finding in
 `finding_indicators`, including its provider results, confidence, verdict reason,
@@ -214,8 +231,57 @@ limitations. A single linked event is presented as event context and is not
 claimed to be a correlated multi-stage attack chain.
 
 `database/backfill_finding_indicators.sql` can be run repeatedly to add
-historical public-IP links without changing existing findings or events. New
-events are linked automatically.
+historical public-IP links. `scripts/backfill_cve_indicators.py` performs a
+dry-run by default, groups historical evidence by CVE, requests only NVD through
+the local Threat Intel service, and idempotently upserts `finding_indicators`
+with `--apply`. Neither backfill updates or deletes source events/findings:
+
+```bash
+sudo docker compose exec -T soc-core \
+  python /app/scripts/backfill_cve_indicators.py
+sudo docker compose exec -T soc-core \
+  python /app/scripts/backfill_cve_indicators.py --apply
+```
+
+New events are linked automatically. NVD's public rate limit is enforced across
+the Threat Intel process; `NVD_API_KEY` can be set to use an issued higher quota.
+The 2026-10-01 historical run reconciled all 161 candidate CVEs (187
+finding/CVE links); both the normal and unavailable-retry dry-runs now return
+zero candidates.
+
+## M365 collection correctness
+
+The collector reads `subscriptions/list` first, accepts already-enabled content
+types as healthy, and sends `POST subscriptions/start` only for missing types.
+Content collection follows bounded `NextPageUri` pagination and stores a Redis
+cursor per content type with a small overlap for late-arriving records. Errors,
+page/blob counts, subscription state, and last poll status are visible at
+`http://localhost:38006/stats`.
+
+New actionable `TIMailData` records are correlated before repeat AI processing.
+The key preference is campaign ID, network-message ID, internet-message ID, then
+a hashed sender/recipient/subject fingerprint inside
+`M365_INCIDENT_WINDOW_SECONDS`. Every raw record remains in `events`; the first
+record creates the finding and later records append to that finding's
+`event_ids` and increment `correlation_count`, capped at
+`M365_INCIDENT_MAX_LINKED_EVENTS` linked details. Historical findings are not
+merged or deleted.
+
+## Safe-lab evidence versus production evidence
+
+Built-in simulation endpoints and `scripts/simulate_events.sh` now mark every
+generated event with `is_synthetic_test=true` and a test marker. Use the bounded
+safe-lab coverage set with:
+
+```bash
+./scripts/simulate_events.sh sensor_coverage
+```
+
+This checks ransomware, DDoS, supply-chain, web-attack, and data-exfiltration
+routing without performing containment or a real attack. It proves parser and
+pipeline behavior only. The 2026-10-01 database audit found zero non-synthetic
+events for these five target event types, so production sensor efficacy remains
+unproven until sanitized sensor output or an approved lab trigger is ingested.
 
 ## Syslog Port Forwarding — Reconfiguration Required
 
@@ -285,7 +351,7 @@ agentic-soc-platform/
 ├── database/init.sql
 ├── prompts/
 └── scripts/
-    ├── audit_verify.py             # 10 sections, 77 checks
+    ├── audit_verify.py             # 11 sections, 92 checks
     ├── verify_environment.sh
     ├── smoke_test.sh
     └── simulate_events.sh

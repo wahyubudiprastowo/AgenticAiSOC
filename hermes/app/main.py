@@ -14,13 +14,16 @@ app = FastAPI(title="Hermes - SOC Orchestrator", version="4.0.0")
 @app.on_event("startup")
 async def startup_event():
     db.init_pool(); load_skills(); memory.ensure_collection()
+    recovered = redis_client.recover_filtered_inflight()
+    if recovered: logger.warning("Recovered %s unacknowledged filtered events", recovered)
     for _ in range(AI_FINDING_WORKERS):
         threading.Thread(target=orchestration_loop, daemon=True).start()
     threading.Thread(target=delivery_loop, daemon=True).start()
 @app.get("/health")
 async def health(): return {"status": "ok", "service": "hermes"}
 @app.get("/stats")
-async def stats(): return {"filtered_queue_length": redis_client.filtered_queue_length(), "finding_workers": AI_FINDING_WORKERS,
+async def stats(): return {"filtered_queue_length": redis_client.filtered_queue_length(),
+                           "filtered_queue": redis_client.filtered_queue_stats(), "finding_workers": AI_FINDING_WORKERS,
                            "skills_loaded": [s.get("skill") for s in load_skills()]}
 @app.get("/skills")
 async def get_skills(): return {"skills": load_skills()}

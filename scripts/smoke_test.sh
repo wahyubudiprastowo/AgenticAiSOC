@@ -12,7 +12,11 @@ declare -A SERVICES=(
 FAILED=0
 for name in "${!SERVICES[@]}"; do
   url="${SERVICES[$name]}"
-  if curl -sf "$url" > /dev/null; then echo "OK ${name}"; else echo "FAIL ${name} (${url})"; FAILED=1; fi
+  if curl -sf "$url" > /dev/null; then echo "REACHABLE ${name}"; else echo "UNREACHABLE ${name} (${url})"; FAILED=1; fi
 done
-if [[ "$FAILED" -eq 0 ]]; then echo "All healthy."; else echo "Some unhealthy. Check: docker compose logs -f <service>"; fi
+if [[ "$FAILED" -eq 0 ]]; then
+  echo "All configured endpoints are reachable. Check /api/health for degraded dependencies."
+else
+  echo "Some endpoints are unreachable. Check: docker compose logs -f <service>"
+fi
 exit $FAILED

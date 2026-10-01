@@ -24,11 +24,18 @@ CYFIRMA_ERROR_BACKOFF_SECONDS = int(os.getenv("CYFIRMA_ERROR_BACKOFF_SECONDS", "
 NVD_ENABLED = os.getenv("NVD_ENABLED", "true").lower() == "true"; NVD_API_KEY = os.getenv("NVD_API_KEY", "")
 NVD_CVE_API_URL = os.getenv("NVD_CVE_API_URL", "https://services.nvd.nist.gov/rest/json/cves/2.0")
 INTEL_PROVIDER_WORKERS = max(1, int(os.getenv("INTEL_PROVIDER_WORKERS", "6")))
+PROVIDER_CIRCUIT_FAILURE_THRESHOLD = max(1, int(os.getenv("INTEL_PROVIDER_CIRCUIT_FAILURE_THRESHOLD", "3")))
+PROVIDER_CIRCUIT_COOLDOWN_SECONDS = max(1, int(os.getenv("INTEL_PROVIDER_CIRCUIT_COOLDOWN_SECONDS", "300")))
 _PROVIDER_EXECUTOR = ThreadPoolExecutor(max_workers=INTEL_PROVIDER_WORKERS, thread_name_prefix="intel-provider")
+_NVD_LOCK = threading.Lock()
+_nvd_last_request = 0.0
 _cyfirma_feed_cache = {"fetched_at": 0.0, "last_attempt": 0.0, "last_error": None, "indicators": set()}
 _cyfirma_refresh_lock = threading.Lock()
 _provider_runtime: dict[str, dict] = {}
 _provider_runtime_lock = threading.Lock()
+_provider_circuits: dict[str, dict[str, float | int]] = {}
+_provider_circuit_lock = threading.Lock()
+_PROVIDER_CIRCUIT_EXEMPT = {"nvd", "cyfirma"}
 _APT_NAME_MARKERS = ("apt", "lazarus", "fancy bear", "cozy bear", "kimsuky", "turla", "sandworm", "volt typhoon",
     "mustang panda", "apt28", "apt29", "apt41", "conti", "fin7", "carbanak", "equation group")
 def _deterministic_mock_score(ioc: str) -> float:
@@ -134,10 +141,16 @@ def check_nvd(ioc, ioc_type):
         return {"name": "nvd", "malicious": False, "score": 0.0, "mode": "disabled"}
     headers = {"apiKey": NVD_API_KEY} if NVD_API_KEY else {}
     try:
-        with httpx.Client(timeout=15) as client:
-            response = client.get(NVD_CVE_API_URL, params={"cveId": ioc.upper()}, headers=headers)
-            response.raise_for_status()
-            return _nvd_result(ioc, response.json())
+        global _nvd_last_request
+        minimum_interval = float(os.getenv("NVD_MIN_REQUEST_INTERVAL_SECONDS", "0.7" if NVD_API_KEY else "6.2"))
+        with _NVD_LOCK:
+            wait_seconds = minimum_interval - (time.monotonic() - _nvd_last_request)
+            if wait_seconds > 0: time.sleep(wait_seconds)
+            _nvd_last_request = time.monotonic()
+            with httpx.Client(timeout=15) as client:
+                response = client.get(NVD_CVE_API_URL, params={"cveId": ioc.upper()}, headers=headers)
+                response.raise_for_status()
+                return _nvd_result(ioc, response.json())
     except Exception as exc:
         return _mock_or_unavailable("nvd", ioc, _error_detail(exc))
 def check_threatfox(ioc, ioc_type):
@@ -253,14 +266,40 @@ PROVIDERS_BY_TYPE = {
     "url": [check_virustotal, check_urlhaus, check_threatfox, check_cyfirma],
     "cve": [check_nvd, check_otx],
 }
-def run_all_providers(ioc, ioc_type):
+def _run_provider(check, ioc, ioc_type):
+    name = check.__name__.removeprefix("check_")
+    if name not in _PROVIDER_CIRCUIT_EXEMPT:
+        now = time.monotonic()
+        with _provider_circuit_lock:
+            state = _provider_circuits.get(name) or {}
+            open_until = float(state.get("open_until", 0))
+        if open_until > now:
+            result = _unavailable_result(name, "provider circuit open after repeated failures")
+            result["retry_after_seconds"] = round(open_until - now)
+            return result
+    result = check(ioc, ioc_type)
+    if name in _PROVIDER_CIRCUIT_EXEMPT or result.get("mode") == "disabled":
+        return result
+    with _provider_circuit_lock:
+        if result.get("mode") == "unavailable":
+            state = _provider_circuits.setdefault(name, {"failures": 0, "open_until": 0.0})
+            failures = int(state.get("failures", 0)) + 1
+            state["failures"] = failures
+            if failures >= PROVIDER_CIRCUIT_FAILURE_THRESHOLD:
+                state["open_until"] = time.monotonic() + PROVIDER_CIRCUIT_COOLDOWN_SECONDS
+        else:
+            _provider_circuits.pop(name, None)
+    return result
+def run_all_providers(ioc, ioc_type, allowed_providers: set[str] | None = None):
     results = []
-    if ioc_type == "ip":
+    if ioc_type == "ip" and (allowed_providers is None or "crowdsec_watchlist" in allowed_providers):
         w = check_crowdsec_watchlist(ioc)
         if w: results.append(w)
     checks = PROVIDERS_BY_TYPE.get(ioc_type, PROVIDERS_BY_TYPE["ip"])
+    if allowed_providers is not None:
+        checks = [check for check in checks if check.__name__.removeprefix("check_") in allowed_providers]
     ordered: list[dict | None] = [None] * len(checks)
-    futures = {_PROVIDER_EXECUTOR.submit(check, ioc, ioc_type): index for index, check in enumerate(checks)}
+    futures = {_PROVIDER_EXECUTOR.submit(_run_provider, check, ioc, ioc_type): index for index, check in enumerate(checks)}
     for future in as_completed(futures):
         index = futures[future]
         try: ordered[index] = future.result()
@@ -284,7 +323,8 @@ def provider_statuses() -> dict:
         "otx": (OTX_ENABLED, bool(OTX_API_KEY)), "threatfox": (THREATFOX_ENABLED, bool(THREATFOX_API_KEY)),
         "urlhaus": (URLHAUS_ENABLED, bool(URLHAUS_API_KEY)), "crowdsec": (CROWDSEC_ENABLED, bool(CROWDSEC_API_KEY)),
         "cyfirma": (CYFIRMA_ENABLED, bool(CYFIRMA_API_KEY)),
-        "nvd": (NVD_ENABLED, bool(NVD_API_KEY)),
+        # NVD API 2.0 supports a lower public quota without an API key.
+        "nvd": (NVD_ENABLED, True),
     }
     output = {}
     for name, (enabled, has_key) in configured.items():

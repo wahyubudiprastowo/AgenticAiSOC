@@ -1,6 +1,6 @@
 # Agentic AI SOC Platform — Coordination Audit Report (v4)
 
-**Status:** 77 PASS / 0 WARN / 0 FAIL
+**Status:** 92 PASS / 0 WARN / 0 FAIL
 **Verify anytime:** `python3 scripts/audit_verify.py`
 
 ## Summary
@@ -24,9 +24,37 @@
 - Historical migration added 1,242 public-IP finding links without updating or
   deleting existing event/finding rows. A pre-patch finding snapshot was compared
   after deployment and every pre-existing field remained identical.
+- Delivery resilience: raw and filtered queues now use atomic claim, ACK,
+  bounded retry, dead-letter handling, and restart recovery. Event completion is
+  persisted before the raw queue item is acknowledged; four bounded raw workers
+  prevent routine records from waiting behind slow external IOC lookups.
+- M365 correctness: existing subscriptions are discovered before start calls,
+  missing subscriptions use POST, content listing follows bounded `NextPageUri`
+  pagination, and each content type has a durable Redis cursor plus status
+  counters.
+- M365 incident aggregation: new TIMailData evidence uses a hashed, bounded
+  campaign/message/user-time key. All source records remain stored while one
+  finding links the incident members and only its first record enters Hermes/Jev.
+  Historical findings are intentionally unchanged.
+- Sensor-evidence truthfulness: built-in syslog/manual safe-lab simulations are
+  explicitly synthetic. The live audit found zero non-synthetic ransomware,
+  DDoS, supply-chain, web-attack, or data-exfiltration event types; no production
+  efficacy claim is inferred from routing tests.
+- Historical CVE enrichment is additive and idempotent. The backfill is dry-run
+  by default and writes only `finding_indicators`; event and finding records are
+  never updated or deleted. The completed run reconciled 161 CVEs / 187 links;
+  final normal and unavailable-retry dry-runs both report zero candidates.
 - Runtime truthfulness: Settings now separates configured, live, partial,
   stale-cache, and unavailable intelligence integrations. Upstream HTTP/auth/rate
   failures no longer appear as healthy provider results.
+- Provider protection: repeated 429/auth/timeout results open a bounded
+  provider-specific circuit. Calls resume after cooldown while findings retain
+  an explicit unavailable result during the open interval.
+- Jev recovery: events arriving during an open upstream circuit no longer reset
+  its cooldown. One half-open probe is admitted after the fixed deadline. The
+  2026-10-01 database snapshot contains 985 remote-reasoned findings, proving
+  that remote reasoning works intermittently even though current health may
+  degrade to explicit fallback when 9router fails.
 - Accuracy phase 1: one versioned registry now controls 17 stable categories and
   their subtypes across SOC Core, Hermes, Jev, dashboard, and audit validation.
   Endpoint Discovery, web-exploit subtypes, and identity-attack subtypes are no
@@ -82,4 +110,4 @@ honestly labeled manual-ingest-only.
 ```bash
 python3 scripts/audit_verify.py
 ```
-Expected: `SUMMARY: 77 PASS, 0 WARN, 0 FAIL`.
+Expected: `SUMMARY: 92 PASS, 0 WARN, 0 FAIL`.

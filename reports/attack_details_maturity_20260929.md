@@ -1,4 +1,4 @@
-# Attack Details maturity audit — updated 2026-09-30
+# Attack Details maturity audit — updated 2026-10-01
 
 ## Scope and method
 
@@ -7,6 +7,9 @@ the `/api/findings/{id}` source-linked detail endpoint, and the rendered browser
 UI. Counts below are a 2026-09-30 08:19 UTC snapshot and continue increasing.
 Synthetic provenance is resolved from the linked source event as well as its
 explicit coverage marker; existing records were not deleted or rewritten.
+New TIMailData collected after the 2026-10-01 aggregation deployment links
+campaign/message/window members to one finding and displays its incident count.
+Historical one-record findings remain unchanged to preserve evidence history.
 
 The normalized pipeline has one 100%-complete, explicitly synthetic validation
 finding for every testable category (16/16). Zero-Day remains intentionally not
@@ -23,7 +26,7 @@ rendering. It does not establish production sensor efficacy.
 | Credential Theft | 23,703 | 4 | 23,699 | 3 | Source evidenced, 100% | Most login evidence has private IP/user context rather than an external IOC |
 | Network Intrusion | 2,882 | 4 | 2,878 | 2,725 | Source evidenced, 100% | Path is still based on individual events, not a correlated chain |
 | Reconnaissance | 2,780 | 4 | 2,776 | 160 | Partial, 71% | Endpoint Discovery often has destination context but no remote source/action |
-| Vulnerability | 189 | 4 | 185 | 2 (1.1%) | Source evidenced, contextual path, CVE present | Historical CVEs have not been reconciled with current NVD data |
+| Vulnerability | 189 | 4 | 185 | Snapshot predates backfill | Source evidenced, contextual path, CVE present | Source patch state still requires endpoint validation; NVD metadata is reference data |
 | File Integrity | 868 | 4 | 864 | 0 | Partial, 86% | Latest row has no acting user; local FIM context has no remote origin by design |
 | Supply Chain | 4 | 4 | 0 | 0 | Validation only | No production package/dependency evidence |
 | DDoS | 4 | 4 | 0 | 0 | Validation only | No production Fortigate DoS evidence |
@@ -72,12 +75,14 @@ NVD status, CISA KEV state, weaknesses, publication/modification times, and an
 explicit patch-reference flag. A live check of CVE-2024-3400 returned NVD mode
 `live`, CVSS 10.0 critical, CISA KEV listed, and OTX live evidence.
 
-Historical synchronization is still incomplete. The database contains 161
-distinct CVEs across Vulnerability/Zero-Day source evidence, while only two
-Vulnerability findings currently have persisted indicator rows. A controlled,
-rate-limited backfill is required; a configured key cannot be treated as proof
-that enrichment succeeded. NVD's patch tag is shown as a reference, not as proof
-that the affected endpoint has installed a fix.
+Historical synchronization completed on 2026-10-01. The dry-run found 161
+distinct candidate CVEs and 187 missing finding/CVE links. The additive job
+inserted the first 3 links, then 184 remaining links. Eight temporarily
+unavailable NVD responses were retried with an explicit cache bypass and all
+completed. Final dry-runs report 0 normal candidates and 0 unavailable retry
+candidates; the database has 166 distinct structured CVE indicators including
+existing/current rows, with 0 CVE links in `unavailable` state. NVD's patch tag
+is shown as a reference, not as proof that the affected endpoint installed a fix.
 
 ## Review of the supplied scripts
 
@@ -95,14 +100,12 @@ that the affected endpoint has installed a fix.
 
 ## Remaining priority order
 
-1. Backfill the 161 historical CVEs into `finding_indicators` with resumable NVD
-   rate limiting and an audit trail.
-2. Replace generic recommendations with category- and evidence-specific actions.
-3. Add source-level tests for Ransomware, Supply Chain, DDoS, Web Application
+1. Replace generic recommendations with category- and evidence-specific actions.
+2. Add source-level tests for Ransomware, Supply Chain, DDoS, Web Application
    Attack, Data Exfiltration, and Threat Actor Attribution, which currently
    have only synthetic or unconfirmed production data.
-4. Add native CloudTrail/Azure and Kubernetes audit collectors.
-5. Build multi-event correlation before calling the displayed context an attack
+3. Add native CloudTrail/Azure and Kubernetes audit collectors.
+4. Build multi-event correlation before calling the displayed context an attack
    chain.
 
 The subtype split is complete: external scanning, network-service scanning, and

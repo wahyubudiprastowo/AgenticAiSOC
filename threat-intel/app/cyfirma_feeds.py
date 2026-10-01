@@ -6,11 +6,14 @@ from . import db
 from . import redis_client
 logger = logging.getLogger("threat-intel.cyfirma_feeds")
 CYFIRMA_API_KEY = os.getenv("CYFIRMA_API_KEY", ""); CYFIRMA_VERIFY_SSL = os.getenv("CYFIRMA_VERIFY_SSL", "true").lower() == "true"
+CYFIRMA_API_KEY_HEADER = os.getenv("CYFIRMA_API_KEY_HEADER", "x-api-key")
 ORG_VULN_ENABLED = os.getenv("CYFIRMA_ORG_VULN_ENABLED", "false").lower() == "true"
 ORG_VULN_API_KEY = os.getenv("CYFIRMA_ORG_VULN_API_KEY", CYFIRMA_API_KEY); ORG_VULN_URL = os.getenv("CYFIRMA_ORG_VULN_URL", "")
+ORG_VULN_API_KEY_HEADER = os.getenv("CYFIRMA_ORG_VULN_API_KEY_HEADER", CYFIRMA_API_KEY_HEADER)
 ORG_VULN_INTERVAL_SECONDS = int(os.getenv("CYFIRMA_ORG_VULN_INTERVAL_SECONDS", "21600"))
 ORG_VULN_LOOKBACK_DAYS = int(os.getenv("CYFIRMA_ORG_VULN_LOOKBACK_DAYS", "30")); ORG_VULN_PAGE_SIZE = int(os.getenv("CYFIRMA_ORG_VULN_PAGE_SIZE", "50"))
 RESEARCH_ENABLED = os.getenv("CYFIRMA_RESEARCH_ENABLED", "false").lower() == "true"; RESEARCH_URL = os.getenv("CYFIRMA_RESEARCH_URL", "")
+RESEARCH_API_KEY_HEADER = os.getenv("CYFIRMA_RESEARCH_API_KEY_HEADER", CYFIRMA_API_KEY_HEADER)
 RESEARCH_INTERVAL_SECONDS = int(os.getenv("CYFIRMA_RESEARCH_INTERVAL_SECONDS", "21600")); RESEARCH_MAX_ITEMS = int(os.getenv("CYFIRMA_RESEARCH_MAX_ITEMS", "25"))
 TAXII_ENABLED = os.getenv("CYFIRMA_TAXII_ENABLED", "false").lower() == "true"
 TAXII_COLLECTION_URL = os.getenv("CYFIRMA_TAXII_COLLECTION_URL", ""); TAXII_BEARER_TOKEN = os.getenv("CYFIRMA_TAXII_BEARER_TOKEN", "")
@@ -22,9 +25,27 @@ _stats = {"org_vuln_polls": 0, "org_vuln_new": 0, "org_vuln_errors": 0, "org_vul
           "research_last_success": None, "research_last_error": None,
           "taxii_polls": 0, "taxii_objects": 0, "taxii_errors": 0,
           "taxii_last_success": None, "taxii_last_error": None}
-def get_stats() -> dict: return dict(_stats)
+def _auth_headers(header_name: str, key: str) -> dict[str, str]:
+    if not key: return {}
+    if header_name.lower() == "authorization": return {"Authorization": f"Bearer {key}"}
+    return {header_name: key}
+def _configuration_status(enabled: bool, url: str, key: str = "") -> str:
+    if not enabled: return "disabled"
+    if not url: return "missing_url"
+    if key == "": return "missing_api_key"
+    return "configured"
+def get_stats() -> dict:
+    org_status = _configuration_status(ORG_VULN_ENABLED, ORG_VULN_URL, ORG_VULN_API_KEY)
+    research_status = _configuration_status(RESEARCH_ENABLED, RESEARCH_URL, CYFIRMA_API_KEY)
+    if org_status == "configured" and _stats["org_vuln_last_error"] in ("HTTP 401", "HTTP 403"):
+        org_status = "authentication_failed"
+    if research_status == "configured" and _stats["research_last_error"] == "invalid_json_endpoint":
+        research_status = "invalid_json_endpoint"
+    return {**_stats, "org_vuln_config_status": org_status,
+            "research_config_status": research_status}
 def _safe_error(exc: Exception) -> str:
     if isinstance(exc, httpx.HTTPStatusError): return f"HTTP {exc.response.status_code}"
+    if isinstance(exc, ValueError) and "JSON" in str(exc): return "invalid_json_endpoint"
     return type(exc).__name__
 def _is_zero_day(item: dict) -> bool:
     if item.get("zero_day") is True: return True
@@ -34,9 +55,11 @@ def poll_org_vulnerabilities_once() -> int:
     if not ORG_VULN_ENABLED: return 0
     if not ORG_VULN_URL or not ORG_VULN_API_KEY: return 0
     since = (datetime.now(timezone.utc) - timedelta(days=ORG_VULN_LOOKBACK_DAYS)).isoformat(); new_count = 0
+    _stats["org_vuln_polls"] += 1
     try:
         with httpx.Client(timeout=30, verify=CYFIRMA_VERIFY_SSL) as client:
-            resp = client.get(ORG_VULN_URL, headers={"Authorization": f"Bearer {ORG_VULN_API_KEY}"}, params={"since": since, "limit": ORG_VULN_PAGE_SIZE})
+            resp = client.get(ORG_VULN_URL, headers=_auth_headers(ORG_VULN_API_KEY_HEADER, ORG_VULN_API_KEY),
+                              params={"since": since, "limit": ORG_VULN_PAGE_SIZE})
             resp.raise_for_status(); data = resp.json()
             items = data.get("objects", data.get("vulnerabilities", data if isinstance(data, list) else []))
             for item in items[:ORG_VULN_PAGE_SIZE]:
@@ -55,7 +78,7 @@ def poll_org_vulnerabilities_once() -> int:
                          "time": datetime.now(timezone.utc).isoformat(), "raw": item, "raw_hash": cve,
                          "raw_kv": {"cve": cve, "provider": "cyfirma_org_vuln", "is_zero_day": zero_day}}
                 redis_client.push_raw_event(event)
-        _stats["org_vuln_polls"] += 1; _stats["org_vuln_new"] += new_count
+        _stats["org_vuln_new"] += new_count
         _stats["org_vuln_last_success"] = datetime.now(timezone.utc).isoformat(); _stats["org_vuln_last_error"] = None
     except Exception as exc:
         _stats["org_vuln_errors"] += 1; _stats["org_vuln_last_error"] = _safe_error(exc)
@@ -68,18 +91,22 @@ def poll_research_once() -> int:
     if not RESEARCH_ENABLED: return 0
     if not RESEARCH_URL: return 0
     new_count = 0
+    _stats["research_polls"] += 1
     try:
         with httpx.Client(timeout=30, verify=CYFIRMA_VERIFY_SSL) as client:
-            headers = {"Authorization": f"Bearer {CYFIRMA_API_KEY}"} if CYFIRMA_API_KEY else {}
+            headers = _auth_headers(RESEARCH_API_KEY_HEADER, CYFIRMA_API_KEY)
             resp = client.get(RESEARCH_URL, headers=headers); resp.raise_for_status()
+            content_type = resp.headers.get("content-type", "").lower()
+            if "json" not in content_type:
+                raise ValueError("configured research URL is not a JSON API endpoint")
             try: data = resp.json()
-            except ValueError as exc: raise ValueError("non-JSON research response") from exc
+            except ValueError as exc: raise ValueError("invalid JSON research response") from exc
             items = data.get("items", data.get("articles", data if isinstance(data, list) else []))
             for item in items[:RESEARCH_MAX_ITEMS]:
                 title = item.get("title", "Untitled"); url = item.get("url", item.get("link", ""))
                 summary = item.get("summary", item.get("description", "")); published_at = item.get("published_at") or item.get("date")
                 if db.upsert_research_item(title=title, url=url, summary=summary, published_at=published_at, raw_payload=item): new_count += 1
-        _stats["research_polls"] += 1; _stats["research_new"] += new_count
+        _stats["research_new"] += new_count
         _stats["research_last_success"] = datetime.now(timezone.utc).isoformat(); _stats["research_last_error"] = None
     except Exception as exc:
         _stats["research_errors"] += 1; _stats["research_last_error"] = _safe_error(exc)

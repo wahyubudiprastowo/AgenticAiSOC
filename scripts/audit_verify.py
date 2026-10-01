@@ -283,12 +283,77 @@ def audit_section_10():
     if "ports" not in jev_cfg and "expose" in jev_cfg: ok("jev-client uses expose-only (zero host collision risk)")
     else: warn("jev-client config unexpected")
 
+def audit_section_11():
+    section("SECTION 11: Reliable Queues, M365 Aggregation, and CVE Backfill")
+    soc_redis = (ROOT / "soc-core" / "app" / "redis_client.py").read_text()
+    soc_worker = (ROOT / "soc-core" / "app" / "worker.py").read_text()
+    soc_main = (ROOT / "soc-core" / "app" / "main.py").read_text()
+    soc_db = (ROOT / "soc-core" / "app" / "db.py").read_text()
+    hermes_redis = (ROOT / "hermes" / "app" / "redis_client.py").read_text()
+    management = (ROOT / "m365-collector" / "app" / "management_api.py").read_text()
+    m365_redis = (ROOT / "m365-collector" / "app" / "redis_client.py").read_text()
+    m365_normalizer = (ROOT / "m365-collector" / "app" / "normalizer.py").read_text()
+    syslog_main = (ROOT / "syslog-collector" / "app" / "main.py").read_text()
+    backfill = (ROOT / "scripts" / "backfill_cve_indicators.py").read_text()
+    intel_main = (ROOT / "threat-intel" / "app" / "main.py").read_text()
+    if "blmove(QUEUE_RAW_EVENTS, QUEUE_RAW_PROCESSING" in soc_redis:
+        ok("SOC Core atomically claims raw events into a processing queue")
+    else: fail("SOC Core raw queue is not using an atomic processing claim")
+    if all(token in soc_redis for token in ("ack_raw_event", "retry_raw_event", "QUEUE_RAW_DLQ", "recover_raw_inflight")):
+        ok("SOC Core raw queue has ACK, bounded retry, dead-letter, and restart recovery")
+    else: fail("SOC Core raw queue reliability controls are incomplete")
+    if "SOC_RAW_EVENT_WORKERS" in soc_worker and "range(worker.SOC_RAW_EVENT_WORKERS)" in soc_main:
+        ok("SOC Core uses a bounded configurable raw-event worker pool")
+    else: fail("SOC Core raw-event worker pool is not configurable")
+    if "pipeline_status" in soc_db and "mark_event_complete" in soc_worker:
+        ok("Event pipeline completion is persisted before queue ACK")
+    else: fail("Event pipeline completion state is not persisted")
+    if all(token in hermes_redis for token in ("blocking_claim_filtered_event", "ack_filtered_event",
+                                                "retry_filtered_event", "QUEUE_FILTERED_DLQ",
+                                                "recover_filtered_inflight")):
+        ok("Hermes filtered queue has atomic claim, ACK, retry, dead-letter, and recovery")
+    else: fail("Hermes filtered queue reliability controls are incomplete")
+    if 'client.post(f"{BASE_URL}/subscriptions/start"' in management:
+        ok("M365 starts Management Activity subscriptions with POST")
+    else: fail("M365 subscription start is not using POST")
+    if 'f"{BASE_URL}/subscriptions/list"' in management and 'item.get("status") == "enabled"' in management:
+        ok("M365 discovers already-enabled subscriptions before starting missing ones")
+    else: fail("M365 subscription discovery is incomplete")
+    if "NextPageUri" in management and "MAX_CONTENT_PAGES" in management:
+        ok("M365 follows bounded NextPageUri pagination")
+    else: fail("M365 content pagination is incomplete")
+    if "cursor_getter" in management and "cursor_setter" in management and "M365_CURSOR_PREFIX" in m365_redis:
+        ok("M365 uses a durable per-content-type Redis cursor")
+    else: fail("M365 durable cursor wiring is incomplete")
+    if all(token in m365_normalizer for token in ("CampaignId", "NetworkMessageId", "InternetMessageId",
+                                                   "incident_key", "M365_INCIDENT_WINDOW_SECONDS")):
+        ok("M365 TIMailData derives bounded campaign/message incident keys")
+    else: fail("M365 TIMailData incident-key derivation is incomplete")
+    if all(token in soc_db for token in ("correlation_key", "attach_event_to_correlated_finding",
+                                         "M365_INCIDENT_MAX_LINKED_EVENTS")) and "incident_aggregated" in soc_worker:
+        ok("M365 incident members link to one finding without repeat AI processing")
+    else: fail("M365 incident finding aggregation is incomplete")
+    if all(token in syslog_main for token in ("synthetic_simulation", "is_synthetic_test", "test_marker")):
+        ok("Built-in syslog simulations are explicitly marked synthetic")
+    else: fail("Built-in syslog simulations can pollute production evidence counts")
+    if "--apply" in backfill and "ON CONFLICT (finding_id,ioc_type,ioc) DO UPDATE" in backfill:
+        ok("Historical CVE backfill is dry-run by default and idempotent on apply")
+    else: fail("Historical CVE backfill safety controls are incomplete")
+    if "refresh=args.refresh_unavailable" in backfill and "not payload.refresh and cached" in intel_main:
+        ok("Unavailable CVE retries can explicitly bypass stale provider cache entries")
+    else: fail("Unavailable CVE retry does not bypass the threat-intel cache")
+    providers = (ROOT / "threat-intel" / "app" / "providers.py").read_text()
+    if all(token in providers for token in ("PROVIDER_CIRCUIT_FAILURE_THRESHOLD", "PROVIDER_CIRCUIT_COOLDOWN_SECONDS",
+                                             "provider circuit open after repeated failures")):
+        ok("Threat-intel providers have bounded failure circuit breakers")
+    else: fail("Threat-intel provider circuit breakers are incomplete")
+
 def main():
     print("Agentic AI SOC Platform — Audit Verifier (v4)")
     print(f"Root: {ROOT}")
     audit_section_1(); audit_section_2(); audit_section_3(); audit_section_4()
     audit_section_5(); audit_section_6(); audit_section_7(); audit_section_8()
-    audit_section_9(); audit_section_10()
+    audit_section_9(); audit_section_10(); audit_section_11()
     print(f"\n{'='*78}\nSUMMARY: {len(PASSES)} PASS, {len(WARNINGS)} WARN, {len(FAILURES)} FAIL\n{'='*78}")
     if FAILURES:
         print("\nFAILURES:")

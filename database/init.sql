@@ -4,6 +4,7 @@ CREATE TABLE IF NOT EXISTS events (
     type TEXT, severity TEXT NOT NULL DEFAULT 'low', src_ip INET, dst_ip INET,
     user_name TEXT, description TEXT, mitre_technique TEXT[], raw_hash TEXT NOT NULL,
     raw_payload JSONB, normalized JSONB NOT NULL, is_filtered_in BOOLEAN NOT NULL DEFAULT FALSE,
+    pipeline_status TEXT NOT NULL DEFAULT 'complete',
     created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS idx_events_severity ON events (severity);
@@ -11,6 +12,7 @@ CREATE INDEX IF NOT EXISTS idx_events_source ON events (source);
 CREATE INDEX IF NOT EXISTS idx_events_created_at ON events (created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_events_src_ip ON events (src_ip);
 CREATE INDEX IF NOT EXISTS idx_events_type ON events (type);
+CREATE INDEX IF NOT EXISTS idx_events_pipeline_status ON events (pipeline_status) WHERE pipeline_status <> 'complete';
 CREATE UNIQUE INDEX IF NOT EXISTS uq_events_source_external_id ON events (source, external_id) WHERE external_id IS NOT NULL;
 CREATE UNIQUE INDEX IF NOT EXISTS uq_events_m365_raw_hash ON events (source, raw_hash) WHERE source IN ('m365_audit', 'm365_defender_xdr');
 CREATE TABLE IF NOT EXISTS intelligence (
@@ -29,13 +31,17 @@ CREATE TABLE IF NOT EXISTS findings (
     attack_family TEXT, attack_subtype TEXT, taxonomy_version TEXT,
     classification_method TEXT, detection_rule_version INTEGER,
     evidence_quality TEXT, attribution_status TEXT NOT NULL DEFAULT 'none',
-    ai_verdict TEXT, ai_reasoning_mode TEXT
+    ai_verdict TEXT, ai_reasoning_mode TEXT,
+    correlation_key TEXT, correlation_scope TEXT,
+    correlation_count INTEGER NOT NULL DEFAULT 1,
+    first_seen TIMESTAMPTZ, last_seen TIMESTAMPTZ
 );
 CREATE INDEX IF NOT EXISTS idx_findings_category ON findings (category);
 CREATE INDEX IF NOT EXISTS idx_findings_severity ON findings (severity);
 CREATE INDEX IF NOT EXISTS idx_findings_created ON findings (created_time DESC);
 CREATE INDEX IF NOT EXISTS idx_findings_subtype ON findings (attack_subtype);
 CREATE UNIQUE INDEX IF NOT EXISTS uq_findings_primary_event ON findings (primary_event_id) WHERE primary_event_id IS NOT NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS uq_findings_correlation_key ON findings (correlation_key) WHERE correlation_key IS NOT NULL;
 CREATE TABLE IF NOT EXISTS finding_indicators (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(), finding_id UUID NOT NULL REFERENCES findings(id) ON DELETE CASCADE,
     event_id UUID REFERENCES events(id) ON DELETE SET NULL, ioc TEXT NOT NULL, ioc_type TEXT NOT NULL,

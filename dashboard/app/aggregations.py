@@ -219,6 +219,7 @@ def attack_detail(finding: dict, events: list[dict]) -> dict:
     )
     effective_family = finding.get("attack_family") or category_family(category)
     effective_taxonomy_version = finding.get("taxonomy_version") or taxonomy_version()
+    correlation_count = int(finding.get("correlation_count") or len(event_details) or 1)
     cve_relevant_categories = {"vulnerability_management", "zero_day", "malware", "suspicious_network",
                                "sql_injection", "apt_activity"}
     cve_status = ("observed_in_source_event" if unique_cves else
@@ -312,8 +313,13 @@ def attack_detail(finding: dict, events: list[dict]) -> dict:
         limitations.append("Synthetic coverage event: proves pipeline routing and field rendering, not source-sensor detection efficacy.")
     if missing:
         limitations.append("Required evidence not reported: " + ", ".join(missing) + ".")
-    if len(event_details) == 1:
+    if len(event_details) == 1 and correlation_count <= 1:
         limitations.append("Only one linked source event is available; the displayed path is event context, not a correlated multi-stage attack chain.")
+    elif correlation_count > 1:
+        limitations.append(
+            f"This finding aggregates {correlation_count} source records under one incident key; "
+            "incident grouping is not proof of a multi-stage attack chain."
+        )
     elif not event_details:
         limitations.append("No linked source event is available, so the finding cannot be independently traced to source telemetry.")
     if not normalized_indicators:
@@ -340,7 +346,10 @@ def attack_detail(finding: dict, events: list[dict]) -> dict:
                     "evidence_quality": finding.get("evidence_quality") or "historical_record",
                     "attribution_status": finding.get("attribution_status"),
                     "ai_verdict": finding.get("ai_verdict"),
-                    "ai_reasoning_mode": finding.get("ai_reasoning_mode")},
+                    "ai_reasoning_mode": finding.get("ai_reasoning_mode"),
+                    "correlation_scope": finding.get("correlation_scope"),
+                    "correlation_count": correlation_count,
+                    "first_seen": finding.get("first_seen"), "last_seen": finding.get("last_seen")},
         "attack": {"sources": unique_sources, "source_ips": unique_src, "source_identities": unique_identities,
                    "destinations": unique_dst, "destination_ips": unique_dst_ips, "actors": unique_actors, "affected_users": unique_affected,
                    "users": unique_users, "event_types": _unique(event_types), "actions": _unique(actions),

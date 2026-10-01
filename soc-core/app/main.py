@@ -12,7 +12,10 @@ app = FastAPI(title="SOC Core", version="4.0.0")
 @app.on_event("startup")
 async def startup_event():
     db.init_pool()
-    threading.Thread(target=worker.raw_event_loop, daemon=True).start()
+    recovered = worker.redis_client.recover_raw_inflight()
+    if recovered: logger.warning("Recovered %s unacknowledged raw events", recovered)
+    for index in range(worker.SOC_RAW_EVENT_WORKERS):
+        threading.Thread(target=worker.raw_event_loop, name=f"raw-event-{index + 1}", daemon=True).start()
     threading.Thread(target=worker.wazuh_alerts_loop, daemon=True).start()
     threading.Thread(target=worker.wazuh_fim_loop, daemon=True).start()
     threading.Thread(target=worker.wazuh_vuln_loop, daemon=True).start()
@@ -25,7 +28,8 @@ def database_health():
 @app.get("/taxonomy")
 async def taxonomy(): return public_registry()
 @app.get("/stats")
-def get_stats(): return db.stats()
+def get_stats(): return {**db.stats(), "raw_queue": worker.redis_client.raw_queue_stats(),
+                         "raw_event_workers": worker.SOC_RAW_EVENT_WORKERS}
 @app.get("/events")
 def get_events(limit: int = 100, severity: str | None = None, since_minutes: int | None = None):
     events = db.list_events(limit=limit, severity=severity, since_minutes=since_minutes)

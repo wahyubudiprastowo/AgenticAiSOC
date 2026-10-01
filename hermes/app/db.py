@@ -44,7 +44,13 @@ def _ensure_finding_schema() -> None:
             cur.execute("ALTER TABLE findings ADD COLUMN IF NOT EXISTS attribution_status TEXT NOT NULL DEFAULT 'none'")
             cur.execute("ALTER TABLE findings ADD COLUMN IF NOT EXISTS ai_verdict TEXT")
             cur.execute("ALTER TABLE findings ADD COLUMN IF NOT EXISTS ai_reasoning_mode TEXT")
+            cur.execute("ALTER TABLE findings ADD COLUMN IF NOT EXISTS correlation_key TEXT")
+            cur.execute("ALTER TABLE findings ADD COLUMN IF NOT EXISTS correlation_scope TEXT")
+            cur.execute("ALTER TABLE findings ADD COLUMN IF NOT EXISTS correlation_count INTEGER NOT NULL DEFAULT 1")
+            cur.execute("ALTER TABLE findings ADD COLUMN IF NOT EXISTS first_seen TIMESTAMPTZ")
+            cur.execute("ALTER TABLE findings ADD COLUMN IF NOT EXISTS last_seen TIMESTAMPTZ")
             cur.execute("CREATE UNIQUE INDEX IF NOT EXISTS uq_findings_primary_event ON findings (primary_event_id) WHERE primary_event_id IS NOT NULL")
+            cur.execute("CREATE UNIQUE INDEX IF NOT EXISTS uq_findings_correlation_key ON findings (correlation_key) WHERE correlation_key IS NOT NULL")
             cur.execute("CREATE INDEX IF NOT EXISTS idx_findings_subtype ON findings (attack_subtype)")
 def insert_finding(event_ids, category, threat_classification, mitre_technique, confidence, severity, evidence, ai_result,
                    recommendation, metadata) -> str:

@@ -2,6 +2,15 @@
 
 Audit time: 2026-09-29 UTC / 2026-09-30 Asia/Jakarta
 
+Reliability phase-2 update (2026-10-01 UTC): the live database passed
+1.10 million events and 140k findings while preserving the earliest finding at
+`2026-09-27 21:22:54+07`. The raw queue moved from about 61k to below 57k after
+enabling four bounded consumers; processing depth equals the four active
+workers, no item is older than ten minutes, and both raw/Hermes dead-letter
+counts are zero. M365 reports all five subscriptions enabled, zero poll errors,
+bounded pagination, and durable cursors. Historical CVE reconciliation now has
+166 distinct structured CVE indicators and zero unavailable CVE links.
+
 Update after accuracy phase 1 (2026-09-30 08:19 UTC): the database held
 979,592 events, 247,582 forwarded events, and 117,600 findings. The earliest
 finding remained `2026-09-27 21:22:54+07`, proving the historical range was
@@ -98,9 +107,9 @@ Attribution**, which remains an assessment and not proof of a campaign.
 |---|---|---|---|
 | Wazuh alerts | Active | 159k+ stored Wazuh events | Broad MITRE forwarding produced many no-match events; source/user/action extraction was incomplete historically |
 | Wazuh FIM | Active | 875 events | Generic FIM is detectable; supply-chain classification depends only on package-path keywords |
-| Wazuh vulnerability index | Active | 245 events | CVE data exists, but historical IOC rows are sparse and zero-day cannot be inferred solely from “unfixed” |
+| Wazuh vulnerability index | Active | 245+ events | CVE source evidence exists; NVD backfill is additive, while zero-day still cannot be inferred solely from “unfixed” |
 | Direct syslog `36514` | Listener healthy | `received=0` after restart; only test/manual syslog rows exist | Devices still send to Wazuh `514`, not this collector |
-| M365 audit | Active | 604k+ stored events | Collector re-reads overlapping 15-minute windows and relies on DB dedup; many upstream requests are duplicates |
+| M365 audit | Active | 872k+ stored events | Subscription/pagination/cursor controls are active; new TIMailData records use bounded incident aggregation while historical findings remain unchanged |
 | Defender XDR | API authorized | Only 6 distinct incidents stored historically | Previous requests omitted `$expand=alerts`, so evidence, IP, user, asset, category, and MITRE were absent |
 | CYFIRMA IOC | Active after patch | Live exact IOC match verified | Previous implementation used Bearer auth; this tenant endpoint requires `x-api-key` |
 | CYFIRMA org vulnerability | Not active | 0 records | Configured endpoint returns HTTP 401 for Bearer, `x-api-key`, `api-key`, and `Key`; correct vendor authentication/entitlement is not available in current config |
@@ -112,8 +121,8 @@ Attribution**, which remains an assessment and not proof of a campaign.
 | OTX | Partial | Live for several IOC types | Hash calls have timed out and some IP requests return HTTP 400 |
 | ThreatFox | Active | Live | No material runtime error in the final check |
 | URLhaus | Active | Live | Supports URL/domain, not every IOC type |
-| NVD | Active on CVE lookup | Live CVE metadata verified | No historical CVE backfill has been run |
-| Jev / 9router | Degraded | Local fallback is producing findings | Upstream returns HTTP 401: all configured chatgpt-web connections are banned and must be reconnected in 9router |
+| NVD | Active on CVE lookup | Live CVE metadata verified | Controlled historical backfill uses NVD-only requests and additive idempotent indicator upserts |
+| Jev / 9router | Intermittent; current health degraded | 985 remote-reasoned findings existed in the 2026-10-01 snapshot; fallback continues during failures | Current upstream failures open a fixed 60-second circuit; 9router connection/auth health must be stabilized |
 | Qdrant | Reachable | 91k+ points | Uses local hash/trigram vectors, not semantic embeddings; `indexed_vectors_count=0`, so current searches are full scans |
 
 ## Why fields are missing
@@ -149,7 +158,11 @@ Attribution**, which remains an assessment and not proof of a campaign.
 
 - CVE is applicable to vulnerability/exploit/package evidence, not to every phishing, login, FIM, or network event.
 - NVD enrichment now works for new CVE-bearing events.
-- Historical findings were created before `finding_indicators` persistence and therefore remain unenriched unless a controlled backfill is run.
+- Historical CVE findings created before `finding_indicators` persistence were
+  reconciled on 2026-10-01 by the controlled NVD-only backfill: 161 candidate
+  CVEs and 187 missing finding/CVE links were processed. Final normal and
+  unavailable-retry dry-runs both report zero candidates. The operation wrote
+  indicator rows only.
 
 ## Detection coverage by current category
 
@@ -157,11 +170,11 @@ Attribution**, which remains an assessment and not proof of a campaign.
 |---|---|---|
 | Malware | Wazuh/M365 present | Active, but artifact/hash coverage depends on source payload |
 | Ransomware | No confirmed production sample | Synthetic validation only |
-| Phishing | Large M365 TIMailData volume | Active; alert-level aggregation is needed to reduce one-finding-per-record noise |
+| Phishing | Large M365 TIMailData volume | Active; new records aggregate by campaign/message/user-time key, while historical one-record findings are preserved |
 | Credential Attack | Wazuh present | Active; several identity attack families are combined |
 | Suspicious Network | Wazuh present | Active; broad fallback bucket and mostly no MITRE mapping |
 | Reconnaissance | Wazuh endpoint discovery present | Active but semantically mixed with external reconnaissance |
-| Vulnerability | Wazuh present | Active; historical NVD/IOC attachment incomplete |
+| Vulnerability | Wazuh present | Active; historical NVD/IOC attachment is covered by the controlled additive backfill |
 | File Integrity | Wazuh present | Active; actor/action context often absent |
 | Supply Chain | No confirmed production sample | Path-keyword heuristic and synthetic validation only |
 | DDoS | No direct production syslog sample | Synthetic Fortigate validation only |
@@ -173,35 +186,66 @@ Attribution**, which remains an assessment and not proof of a campaign.
 | Cloud-Native | Manual ingest | No AWS/Azure collector |
 | Container/Kubernetes | Manual ingest | No Kubernetes audit/Falco collector |
 
-## Reliability and behavior gaps
+## Reliability and behavior status
 
-1. Redis uses destructive `BRPOP` queues without acknowledgement, retry queue, or dead-letter queue. A crash after pop can lose a raw event or optional AI processing.
-2. Wazuh polling uses overlapping time windows and fixed result limits without a persistent cursor. Long downtime or bursts beyond the query size can create gaps.
-3. M365 polling repeats a 15-minute window every five minutes and does not follow the Management Activity `NextPageUri`. Database dedup prevents duplicate rows, but upstream bandwidth, Redis, and DB lookups are wasted and pagination can miss records.
-4. Several collectors catch exceptions and return empty lists. Their `/health` endpoints can remain healthy while the upstream source is unauthorized or unavailable.
-5. Jev previously reported healthy when only local fallback was running. The patch now exposes `reasoning.mode=fallback` and the dashboard marks it degraded.
-6. Qdrant failures are silently ignored. Hash vectors provide lexical similarity only and `QDRANT_EMBEDDING_MODE` was not used by code.
-7. Threat-intelligence provider calls have no global per-provider rate limiter or circuit breaker. VirusTotal 429 responses demonstrate the impact.
-8. At least 48 `.env` keys are not referenced by runtime code or compose behavior. Important examples include `FILTER_REQUIRE_IOC_OR_MITRE`, multiple `SOC_*` budget/cache/stream settings, AI enable/cache/lease flags, `WAZUH_ARCHIVES_INDEX`, and `QDRANT_EMBEDDING_MODE`. The Settings page currently makes these look operational.
-9. Direct syslog has no RFC3164/RFC5424/vendor parser registry. Unknown messages become `generic` rather than a parse error, so `errors=0` does not mean successful semantic parsing.
-10. Existing source data is not automatically updated when a richer normalizer is deployed because duplicate events return early. The new Defender detail therefore applies to new incident IDs unless a controlled backfill is run.
+1. **Resolved:** Redis raw and filtered lists now atomically move claimed items
+   into processing lists. ACK occurs only after persistent completion; failures
+   receive bounded retry, then dead-letter handling, and startup recovers
+   unacknowledged items. A bounded raw worker pool prevents routine records from
+   waiting behind one slow enrichment operation.
+2. **Open:** Wazuh polling uses overlapping time windows and fixed result limits
+   without a persistent timestamp/document-ID cursor. Long downtime or bursts
+   beyond the query size can create gaps.
+3. **Resolved:** M365 uses POST for missing subscriptions, discovers subscriptions
+   that are already enabled, follows bounded `NextPageUri`, and stores one Redis
+   cursor per content type. Poll/page/blob errors are explicit in `/stats`. New
+   TIMailData evidence is grouped into one finding per bounded incident key;
+   member events remain individually stored and linked.
+4. **Partially resolved:** source-specific stats now expose M365 and CYFIRMA
+   failures, but several other collectors still need newest-source timestamp and
+   lag in their health contract.
+5. **Resolved:** Jev fallback is exposed as `reasoning.mode=fallback`, and the
+   dashboard marks it degraded instead of remote-AI healthy. Open-circuit traffic
+   no longer extends the cooldown indefinitely; one half-open probe runs after
+   the fixed deadline.
+6. **Open:** Qdrant uses deterministic hash vectors, not semantic embeddings;
+   retention and stale-point cleanup are absent.
+7. **Resolved for failure containment:** NVD has a process-wide rate limiter;
+   other providers open bounded per-provider circuits after repeated failure.
+   Runtime still correctly reports VT 429, AbuseIPDB 401, CrowdSec 403, and OTX
+   timeout as unavailable; valid credentials/quotas remain an external task.
+8. **Open:** unused/dead environment keys must be removed or marked inactive so
+   Settings represents actual behavior.
+9. **Open:** direct syslog has no complete RFC3164/RFC5424/vendor parser registry.
+   Unknown messages become `generic`, so `errors=0` is not proof of semantic parsing.
+10. **Open:** richer normalizers do not rewrite duplicate historical events.
+    Any source-evidence migration must remain a separate dry-run/additive job.
 
 ## Priority remediation
 
 ### P0 — restore evidence sources and honest status
 
-1. Reconnect the two banned chatgpt-web connections in 9router. Until then Jev is a deterministic local fallback, not remote AI reasoning.
+1. Stabilize the configured 9router upstream connection/authentication. Remote
+   reasoning is proven by 985 stored remote findings, but current failures still
+   trigger an explicit deterministic fallback and degraded health.
 2. Obtain the documented CYFIRMA organization-vulnerability authentication method and entitlement. The existing URL/key combination is rejected independently of common header styles.
 3. Replace the CYFIRMA research webpage URL with a supported JSON/TAXII/feed endpoint or disable the feed flag.
 4. Send a second device syslog destination to port `36514`, or deploy a relay/fanout before Wazuh. Do not bind a second service to Wazuh-owned port `514`.
+5. Replace or re-entitle the credentials/quotas currently returning VirusTotal
+   429, AbuseIPDB 401, and CrowdSec 403. These remain explicit `unavailable`
+   provider results; they are never interpreted as clean IOCs.
 
 ### P1 — prevent loss, noise, and hidden source failures
 
-1. Replace Redis list consumption with Redis Streams consumer groups, acknowledgement, retry, and dead-letter handling.
-2. Add persistent Wazuh cursors using timestamp plus document ID and page through all results.
-3. Implement M365 `NextPageUri`, a durable content cursor, and explicit error/status counters.
-4. Add provider circuit breakers and per-provider quotas, especially for VirusTotal.
-5. Make source health include last successful poll, last error, newest source timestamp, and lag.
+Completed: acknowledged Redis delivery with retry/DLQ/recovery; persisted event
+pipeline state; bounded raw consumers; M365 subscription discovery, POST start,
+pagination, cursor, and counters.
+
+Remaining priority:
+
+1. Add persistent Wazuh cursors using timestamp plus document ID and page through all results.
+2. Make every source health response include last successful poll, last error,
+   newest source timestamp, and lag.
 
 ### P2 — improve classification accuracy
 
@@ -215,17 +259,22 @@ Completed in phase 1:
 
 Still required:
 
-1. Aggregate related M365 mail evidence into incidents instead of creating one
-   finding for every TIMailData record.
-2. Add source-specific parser fixtures from real sanitized Wazuh, Fortigate,
+1. Add source-specific parser fixtures from real sanitized Wazuh, Fortigate,
    Defender, M365, AWS, and Kubernetes payloads.
 
 ### P3 — complete coverage
 
 1. Add CloudTrail/Azure Activity collectors and Kubernetes audit/Falco ingestion.
-2. Build controlled historical IOC/CVE enrichment and Defender evidence backfill with checkpointing and dry-run counts.
+2. Build a controlled Defender evidence backfill; the historical CVE backfill is implemented as an idempotent NVD-only job.
 3. Replace hash-vector Qdrant memory with a real embedding model, payload indexes, retention, and stale-point cleanup.
 4. Remove or mark unused settings so the Settings page represents actual behavior.
+5. Obtain sanitized production sensor samples for ransomware, DDoS, supply
+   chain, WAF/web attacks, data exfiltration, and attribution before claiming
+   source-level coverage. Current routing tests for these categories are
+   synthetic evidence only.
+6. Keep Zero-Day at zero until a trusted source supplies explicit no-fix or
+   active-exploitation evidence. Absence of an NVD patch reference alone is not
+   sufficient to create a Zero-Day finding.
 
 ## Patches applied during this audit
 
@@ -237,6 +286,9 @@ Still required:
 - Wazuh informational events no longer become security signals merely because a MITRE ID exists.
 - Generic syslog transport peers are stored as `observer_ip`, not falsely displayed as attacker IP.
 - Jev records `remote` versus `fallback` mode and exposes the upstream error in health without exposing credentials.
+- Jev's fixed cooldown can no longer be extended indefinitely by incoming
+  events; health now exposes circuit state and retry delay, and a single
+  half-open probe runs when cooldown expires.
 - Defender `InitialAccess` alerts can route to the M365 identity-compromise skill.
 - Added canonical taxonomy/family/subtype metadata to new findings and strict
   taxonomy validation to Hermes skills and Jev proposals.
@@ -249,10 +301,31 @@ Still required:
   a bounded pool slot; 18 concurrent dashboard requests returned HTTP 200.
 - Historical finding fields are inferred only for display and are marked as
   inferred; stored historical event/finding rows remain unchanged.
+- Raw and filtered queues now use atomic claim/ACK, bounded retry, dead-letter,
+  and restart recovery. `events.pipeline_status` makes interrupted raw processing
+  resumable without rewriting completed history.
+- M365 now discovers enabled subscriptions, starts only missing types with POST,
+  follows bounded pagination, and persists per-content cursors.
+- New M365 TIMailData records derive privacy-safe campaign/message/window keys.
+  One finding links all incident members; subsequent members bypass repeat IOC
+  and AI work. A temporary two-event integration test produced one finding with
+  `correlation_count=2`, then removed every test row.
+- Built-in syslog and normalized safe-lab scenarios now carry explicit synthetic
+  provenance. A live audit found zero non-synthetic records for ransomware,
+  DDoS, supply-chain, web-attack, and data-exfiltration event types, so those
+  production sensor gaps remain open.
+- `scripts/backfill_cve_indicators.py` adds current NVD metadata to historical
+  CVE findings through dry-run-first, NVD-only, idempotent indicator upserts.
+  The completed run left 0 missing candidates and 0 unavailable CVE links.
+- Repeated threat-intelligence failures now open bounded provider-specific
+  circuits, preserving an unavailable verdict while preventing failed APIs from
+  continuously occupying the worker pool.
 
-Validation after phase 1: smoke tests report all services healthy; the audit
-verifier reports 77 PASS / 0 WARN / 0 FAIL; the 17-category detail audit found
+Validation after phase 1: smoke tests confirm all service endpoints are
+reachable; dashboard health reports 7/8 healthy because Jev remote is degraded.
+The audit verifier reports 92 PASS / 0 WARN / 0 FAIL; the 17-category detail audit found
 data in 16 categories and correctly reported Zero-Day as zero data; Hermes queue
 depth was zero; and no confidence-zero fallback findings remained. Jev remote
-reasoning is still degraded, CYFIRMA organization vulnerabilities still return
-HTTP 401, and those external issues remain visible in Settings.
+reasoning has produced 985 stored findings but remains intermittent, CYFIRMA
+organization vulnerabilities still return HTTP 401, and those external issues
+remain visible in Settings.

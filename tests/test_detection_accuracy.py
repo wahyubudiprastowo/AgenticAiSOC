@@ -6,6 +6,7 @@ from pathlib import Path
 import sys
 import types
 import unittest
+from unittest import mock
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -25,6 +26,14 @@ def load_module(name: str, relative_path: str):
 
 
 m365 = load_module("m365_normalizer_test", "m365-collector/app/normalizer.py")
+
+management_package = types.ModuleType("m365_management_test")
+management_package.__path__ = []
+management_auth = types.ModuleType("m365_management_test.auth")
+management_auth.get_management_api_token = lambda *_: "test-token"
+sys.modules["m365_management_test"] = management_package
+sys.modules["m365_management_test.auth"] = management_auth
+m365_management = load_module("m365_management_test.management_api", "m365-collector/app/management_api.py")
 syslog = load_module("syslog_normalizer_test", "syslog-collector/app/normalizer.py")
 wazuh = load_module("wazuh_client_test", "soc-core/app/wazuh_client.py")
 skills = load_module("skill_loader_test", "hermes/app/skill_loader.py")
@@ -34,6 +43,7 @@ memory = load_module("hermes_memory_test", "hermes/app/memory.py")
 detections = load_module("soc_detections_test", "soc-core/app/detections.py")
 ioc_extractor = load_module("soc_ioc_extractor_test", "soc-core/app/ioc_extractor.py")
 filters = load_module("soc_filters_test", "soc-core/app/filters.py")
+jev_circuit = load_module("jev_circuit_test", "jev-client/app/circuit.py")
 
 
 class M365NormalizerTests(unittest.TestCase):
@@ -62,6 +72,148 @@ class M365NormalizerTests(unittest.TestCase):
         event = m365.normalize_m365_record({"Id": "phish", "Operation": "PhishNotAllowed", "Workload": "Exchange"})
         self.assertEqual(event["type"], "phishing")
         self.assertTrue(event["raw_kv"]["security_signal"])
+
+    def test_timaildata_groups_same_network_message_and_extracts_path(self):
+        base = {"Operation": "TIMailData", "Workload": "ThreatIntelligence",
+                "CreationTime": "2026-10-01T12:15:00Z", "MessageTime": "2026-10-01T12:10:00Z",
+                "NetworkMessageId": "network-message-1", "InternetMessageId": "<message-1@example.test>",
+                "Verdict": "Phish", "ThreatsAndDetectionTech": "Phish campaign",
+                "P2Sender": "sender@example.test", "SenderIp": "198.51.100.20",
+                "Recipients": ["recipient@example.test"], "DeliveryAction": "Blocked"}
+        first = m365.normalize_m365_record({**base, "Id": "record-1"})
+        second = m365.normalize_m365_record({**base, "Id": "record-2"})
+        self.assertEqual(first["raw_kv"]["incident_key"], second["raw_kv"]["incident_key"])
+        self.assertEqual(first["raw_kv"]["incident_scope"], "network_message")
+        self.assertEqual(first["src_ip"], "198.51.100.20")
+        self.assertEqual(first["user_name"], "recipient@example.test")
+        self.assertEqual(first["destination"], "recipient@example.test")
+        self.assertEqual(first["action"], "Blocked")
+
+    def test_timaildata_campaign_groups_messages_only_inside_window(self):
+        base = {"Operation": "TIMailData", "Workload": "ThreatIntelligence", "CampaignId": "campaign-1",
+                "Verdict": "Phish", "ThreatsAndDetectionTech": "Phish"}
+        first = m365.normalize_m365_record({**base, "Id": "a", "NetworkMessageId": "n1",
+                                            "MessageTime": "2026-10-01T12:01:00Z"})
+        same_window = m365.normalize_m365_record({**base, "Id": "b", "NetworkMessageId": "n2",
+                                                  "MessageTime": "2026-10-01T12:59:00Z"})
+        next_window = m365.normalize_m365_record({**base, "Id": "c", "NetworkMessageId": "n3",
+                                                  "MessageTime": "2026-10-01T13:01:00Z"})
+        self.assertEqual(first["raw_kv"]["incident_key"], same_window["raw_kv"]["incident_key"])
+        self.assertNotEqual(first["raw_kv"]["incident_key"], next_window["raw_kv"]["incident_key"])
+        self.assertEqual(first["raw_kv"]["incident_scope"], "campaign")
+
+
+class M365ManagementApiTests(unittest.TestCase):
+    def test_next_page_uri_is_restricted_to_microsoft_management_hosts(self):
+        valid = "https://manage.office.com/api/v1.0/tenant/activity/feed/subscriptions/content?nextPage=1"
+        self.assertEqual(m365_management._safe_next_page_uri(valid), valid)
+        with self.assertRaises(RuntimeError):
+            m365_management._safe_next_page_uri("https://example.invalid/steal-token")
+
+    def test_subscription_start_uses_post(self):
+        response = mock.Mock()
+        response.raise_for_status.return_value = None
+        response.json.return_value = []
+        client = mock.MagicMock()
+        client.__enter__.return_value.get.return_value = response
+        client.__enter__.return_value.post.return_value = response
+        original_types = m365_management.CONTENT_TYPES
+        original_started = m365_management._started_subscriptions
+        try:
+            m365_management.CONTENT_TYPES = ["Audit.General"]
+            m365_management._started_subscriptions = set()
+            with mock.patch.object(m365_management.httpx, "Client", return_value=client):
+                m365_management.ensure_subscriptions_started()
+            client.__enter__.return_value.post.assert_called_once()
+            client.__enter__.return_value.put.assert_not_called()
+        finally:
+            m365_management.CONTENT_TYPES = original_types
+            m365_management._started_subscriptions = original_started
+
+    def test_enabled_subscriptions_are_not_started_again(self):
+        response = mock.Mock()
+        response.raise_for_status.return_value = None
+        response.json.return_value = [{"contentType": "Audit.General", "status": "enabled"}]
+        client = mock.MagicMock()
+        client.__enter__.return_value.get.return_value = response
+        original_types = m365_management.CONTENT_TYPES
+        original_started = m365_management._started_subscriptions
+        try:
+            m365_management.CONTENT_TYPES = ["Audit.General"]
+            m365_management._started_subscriptions = set()
+            with mock.patch.object(m365_management.httpx, "Client", return_value=client):
+                m365_management.ensure_subscriptions_started()
+            client.__enter__.return_value.post.assert_not_called()
+            self.assertEqual(m365_management._started_subscriptions, {"Audit.General"})
+        finally:
+            m365_management.CONTENT_TYPES = original_types
+            m365_management._started_subscriptions = original_started
+
+    def test_cursor_overlaps_without_exceeding_24_hours(self):
+        from datetime import datetime, timezone
+        end = datetime(2026, 10, 1, 12, 0, tzinfo=timezone.utc)
+        start = m365_management._cursor_start("2026-10-01T11:55:00+00:00", end, 15)
+        self.assertEqual(start.isoformat(), "2026-10-01T11:53:00+00:00")
+        capped = m365_management._cursor_start("2026-09-01T00:00:00+00:00", end, 15)
+        self.assertEqual(capped.isoformat(), "2026-09-30T12:00:00+00:00")
+
+
+class ProviderCircuitTests(unittest.TestCase):
+    def test_nvd_without_api_key_is_configured_before_first_live_check(self):
+        with providers._provider_runtime_lock:
+            saved = dict(providers._provider_runtime)
+            providers._provider_runtime.clear()
+        try:
+            self.assertEqual(providers.provider_statuses()["nvd"]["mode"], "configured")
+        finally:
+            with providers._provider_runtime_lock:
+                providers._provider_runtime.clear()
+                providers._provider_runtime.update(saved)
+
+    def test_repeated_unavailable_results_open_bounded_circuit(self):
+        calls = []
+        def failing_provider(ioc, ioc_type):
+            calls.append((ioc, ioc_type))
+            return {"name": "testprovider", "mode": "unavailable", "malicious": False,
+                    "score": 0.0, "detail": "HTTP 429"}
+        failing_provider.__name__ = "check_testprovider"
+        original_threshold = providers.PROVIDER_CIRCUIT_FAILURE_THRESHOLD
+        original_cooldown = providers.PROVIDER_CIRCUIT_COOLDOWN_SECONDS
+        try:
+            providers.PROVIDER_CIRCUIT_FAILURE_THRESHOLD = 2
+            providers.PROVIDER_CIRCUIT_COOLDOWN_SECONDS = 60
+            providers._provider_circuits.clear()
+            providers._run_provider(failing_provider, "example", "domain")
+            providers._run_provider(failing_provider, "example", "domain")
+            blocked = providers._run_provider(failing_provider, "example", "domain")
+            self.assertEqual(len(calls), 2)
+            self.assertEqual(blocked["mode"], "unavailable")
+            self.assertIn("circuit open", blocked["detail"])
+        finally:
+            providers._provider_circuits.clear()
+            providers.PROVIDER_CIRCUIT_FAILURE_THRESHOLD = original_threshold
+            providers.PROVIDER_CIRCUIT_COOLDOWN_SECONDS = original_cooldown
+
+
+class JevCircuitTests(unittest.TestCase):
+    def test_open_circuit_does_not_extend_deadline_for_each_event(self):
+        circuit = jev_circuit.RemoteCircuitBreaker(60)
+        circuit.finish(False, now=100)
+        self.assertEqual(circuit.snapshot(now=110)["retry_after_seconds"], 50)
+        allowed, reason = circuit.begin(now=120)
+        self.assertFalse(allowed)
+        self.assertIn("retry in 40.0s", reason)
+        self.assertEqual(circuit.snapshot(now=120)["retry_after_seconds"], 40)
+
+    def test_expired_circuit_allows_one_half_open_probe(self):
+        circuit = jev_circuit.RemoteCircuitBreaker(60)
+        circuit.finish(False, now=100)
+        self.assertEqual(circuit.begin(now=160), (True, None))
+        blocked, reason = circuit.begin(now=161)
+        self.assertFalse(blocked)
+        self.assertIn("half-open probe", reason)
+        circuit.finish(True, now=162)
+        self.assertEqual(circuit.snapshot(now=162)["circuit_state"], "closed")
 
 
 class SourceNormalizerTests(unittest.TestCase):
@@ -284,6 +436,22 @@ class ThreatIntelSafetyTests(unittest.TestCase):
 
 
 class DashboardAttackDetailTests(unittest.TestCase):
+    def test_correlated_finding_reports_incident_count_without_claiming_attack_chain(self):
+        finding = {"id": "incident-1", "category": "phishing", "threat_classification": "Phishing",
+                   "severity": "high", "confidence": 0.8, "mitre_technique": ["T1566"],
+                   "evidence": {}, "ai_result": {}, "correlation_scope": "network_message",
+                   "correlation_count": 3, "first_seen": "2026-10-01T12:00:00Z",
+                   "last_seen": "2026-10-01T12:10:00Z"}
+        event = {"id": "event-1", "source": "m365_audit", "type": "phishing", "severity": "high",
+                 "description": "ThreatIntelligence: TIMailData phishing detection",
+                 "normalized": {"destination": "recipient@example.test", "raw_kv": {
+                     "operation": "TIMailData", "recipients": ["recipient@example.test"],
+                     "sender": "sender@example.test"}}}
+        detail = dashboard_agg.attack_detail(finding, [event])
+        self.assertEqual(detail["finding"]["correlation_count"], 3)
+        self.assertEqual(detail["finding"]["correlation_scope"], "network_message")
+        self.assertTrue(any("aggregates 3 source records" in item for item in detail["quality"]["limitations"]))
+
     def test_legacy_finding_taxonomy_is_inferred_without_mutating_input(self):
         finding = {"id": "legacy", "category": "credential_attack", "threat_classification": "Brute Force",
                    "severity": "high", "confidence": 0.8, "evidence": {}, "ai_result": {}}

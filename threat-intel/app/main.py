@@ -14,6 +14,8 @@ CACHE_TTL_SECONDS = int(os.getenv("INTEL_CACHE_TTL_SECONDS", "3600"))
 class EnrichRequest(BaseModel):
     ioc: str
     ioc_type: Literal["ip", "domain", "hash", "url", "cve"] = "ip"
+    providers: list[str] | None = None
+    refresh: bool = False
 @app.on_event("startup")
 async def startup_event() -> None:
     db.init_pool()
@@ -42,10 +44,12 @@ def poll_now() -> dict:
             "taxii_objects": cyfirma_feeds.poll_taxii_once()}
 @app.post("/enrich")
 def enrich(payload: EnrichRequest) -> dict:
-    cache_key = f"{payload.ioc_type}:{payload.ioc}"; now = time.time(); cached = _CACHE.get(cache_key)
-    if cached and (now - cached[0]) < CACHE_TTL_SECONDS:
+    requested_providers = set(payload.providers) if payload.providers else None
+    provider_cache_key = ",".join(sorted(requested_providers)) if requested_providers else "all"
+    cache_key = f"{payload.ioc_type}:{payload.ioc}:{provider_cache_key}"; now = time.time(); cached = _CACHE.get(cache_key)
+    if not payload.refresh and cached and (now - cached[0]) < CACHE_TTL_SECONDS:
         return {**cached[1], "cache_status": "fresh", "cache_age_seconds": round(now - cached[0], 1)}
-    providers = run_all_providers(payload.ioc, payload.ioc_type)
+    providers = run_all_providers(payload.ioc, payload.ioc_type, requested_providers)
     live_hits = [p for p in providers if p.get("mode") == "live" and p.get("malicious")]
     strong_sources = {"threatfox", "urlhaus", "cyfirma", "crowdsec_watchlist"}
     strong_exact_hit = any(p.get("name") in strong_sources and float(p.get("score", 0)) >= 0.8 for p in live_hits)
