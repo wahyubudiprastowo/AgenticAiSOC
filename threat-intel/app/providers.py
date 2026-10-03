@@ -347,6 +347,38 @@ def provider_statuses() -> dict:
                         "last_ioc_type": latest_type, "detail": "; ".join(failures) or latest.get("detail"),
                         "by_ioc_type": by_type}
     return output
+
+
+def summarize_health(provider_states: dict, feed_stats: dict) -> dict:
+    """Summarize cached provider/feed state without making outbound requests."""
+    unavailable = sorted(
+        name for name, state in provider_states.items()
+        if state.get("enabled") and state.get("mode") == "unavailable"
+    )
+    partial = sorted(
+        name for name, state in provider_states.items()
+        if state.get("enabled") and state.get("mode") in {"partial", "stale_cache"}
+    )
+    feed_states = {
+        "cyfirma_org_vulnerability": feed_stats.get("org_vuln_config_status"),
+        "cyfirma_research": feed_stats.get("research_config_status"),
+        "cyfirma_taxii": feed_stats.get("taxii_config_status"),
+    }
+    feed_failures = sorted(
+        name for name, state in feed_states.items()
+        if state not in {None, "configured", "disabled"}
+    )
+    return {
+        "status": "degraded" if unavailable or partial or feed_failures else "ok",
+        "service": "threat-intel",
+        "providers": {
+            "enabled": sum(bool(state.get("enabled")) for state in provider_states.values()),
+            "live": sum(state.get("mode") == "live" for state in provider_states.values()),
+            "unavailable": unavailable,
+            "partial": partial,
+        },
+        "feed_failures": feed_failures,
+    }
 def detect_apt_indicator(ioc_hits: list[dict]) -> Optional[str]:
     for hit in ioc_hits:
         detail = (hit.get("detail") or "").lower()

@@ -3,9 +3,12 @@ import logging, os
 import httpx
 logger = logging.getLogger("soc-core.threat_intel_client")
 THREAT_INTEL_URL = os.getenv("THREAT_INTEL_URL", "http://threat-intel:8005")
+THREAT_INTEL_TIMEOUT_SECONDS = float(os.getenv("THREAT_INTEL_TIMEOUT_SECONDS", "20"))
+THREAT_INTEL_CVE_TIMEOUT_SECONDS = float(os.getenv("THREAT_INTEL_CVE_TIMEOUT_SECONDS", "45"))
 def enrich_ioc(ioc: str, ioc_type: str = "ip"):
     try:
-        with httpx.Client(timeout=15) as client:
+        timeout = THREAT_INTEL_CVE_TIMEOUT_SECONDS if ioc_type == "cve" else THREAT_INTEL_TIMEOUT_SECONDS
+        with httpx.Client(timeout=timeout) as client:
             resp = client.post(f"{THREAT_INTEL_URL.rstrip('/')}/enrich", json={"ioc": ioc, "ioc_type": ioc_type})
             resp.raise_for_status(); return resp.json()
     except Exception:

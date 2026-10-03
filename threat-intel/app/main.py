@@ -5,12 +5,13 @@ from fastapi import FastAPI
 from pydantic import BaseModel
 from . import cyfirma_feeds
 from . import db
-from .providers import provider_statuses, run_all_providers, warm_cyfirma_feed
+from .providers import provider_statuses, run_all_providers, summarize_health, warm_cyfirma_feed
 logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"))
 logger = logging.getLogger("threat-intel.main")
 app = FastAPI(title="Threat Intelligence Service", version="4.0.0")
 _CACHE: dict[str, tuple[float, dict]] = {}
 CACHE_TTL_SECONDS = int(os.getenv("INTEL_CACHE_TTL_SECONDS", "3600"))
+NVD_DB_CACHE_TTL_SECONDS = int(os.getenv("NVD_DB_CACHE_TTL_SECONDS", "86400"))
 class EnrichRequest(BaseModel):
     ioc: str
     ioc_type: Literal["ip", "domain", "hash", "url", "cve"] = "ip"
@@ -23,8 +24,16 @@ async def startup_event() -> None:
     threading.Thread(target=cyfirma_feeds.research_loop, daemon=True).start()
     threading.Thread(target=cyfirma_feeds.taxii_loop, daemon=True).start()
     threading.Thread(target=warm_cyfirma_feed, daemon=True).start()
+
+
+def _runtime_health() -> dict:
+    providers = provider_statuses()
+    feeds = cyfirma_feeds.get_stats()
+    return summarize_health(providers, feeds)
+
+
 @app.get("/health")
-async def health() -> dict: return {"status": "ok", "service": "threat-intel"}
+async def health() -> dict: return _runtime_health()
 @app.get("/providers")
 async def providers_status() -> dict:
     return provider_statuses()
@@ -49,7 +58,22 @@ def enrich(payload: EnrichRequest) -> dict:
     cache_key = f"{payload.ioc_type}:{payload.ioc}:{provider_cache_key}"; now = time.time(); cached = _CACHE.get(cache_key)
     if not payload.refresh and cached and (now - cached[0]) < CACHE_TTL_SECONDS:
         return {**cached[1], "cache_status": "fresh", "cache_age_seconds": round(now - cached[0], 1)}
-    providers = run_all_providers(payload.ioc, payload.ioc_type, requested_providers)
+    cached_nvd = None
+    if payload.ioc_type == "cve" and not payload.refresh and \
+            (requested_providers is None or "nvd" in requested_providers):
+        try:
+            cached_nvd = db.get_recent_provider_result(
+                payload.ioc, "cve", "nvd", NVD_DB_CACHE_TTL_SECONDS)
+        except Exception:
+            logger.exception("Failed to read persisted NVD evidence; using live provider")
+    if cached_nvd:
+        # Reuse persisted live NVD evidence while other requested CVE providers
+        # still run and remain visible in the result.
+        remaining = {"otx"} if requested_providers is None else requested_providers - {"nvd"}
+        providers = run_all_providers(payload.ioc, payload.ioc_type, remaining) if remaining else []
+        providers.append({**cached_nvd, "cache_source": "database"})
+    else:
+        providers = run_all_providers(payload.ioc, payload.ioc_type, requested_providers)
     live_hits = [p for p in providers if p.get("mode") == "live" and p.get("malicious")]
     strong_sources = {"threatfox", "urlhaus", "cyfirma", "crowdsec_watchlist"}
     strong_exact_hit = any(p.get("name") in strong_sources and float(p.get("score", 0)) >= 0.8 for p in live_hits)

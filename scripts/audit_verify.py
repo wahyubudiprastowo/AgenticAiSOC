@@ -291,11 +291,19 @@ def audit_section_11():
     soc_db = (ROOT / "soc-core" / "app" / "db.py").read_text()
     hermes_redis = (ROOT / "hermes" / "app" / "redis_client.py").read_text()
     management = (ROOT / "m365-collector" / "app" / "management_api.py").read_text()
+    m365_auth = (ROOT / "m365-collector" / "app" / "auth.py").read_text()
+    m365_defender = (ROOT / "m365-collector" / "app" / "defender_xdr.py").read_text()
+    m365_main = (ROOT / "m365-collector" / "app" / "main.py").read_text()
     m365_redis = (ROOT / "m365-collector" / "app" / "redis_client.py").read_text()
     m365_normalizer = (ROOT / "m365-collector" / "app" / "normalizer.py").read_text()
     syslog_main = (ROOT / "syslog-collector" / "app" / "main.py").read_text()
     backfill = (ROOT / "scripts" / "backfill_cve_indicators.py").read_text()
     intel_main = (ROOT / "threat-intel" / "app" / "main.py").read_text()
+    intel_db = (ROOT / "threat-intel" / "app" / "db.py").read_text()
+    soc_intel_client = (ROOT / "soc-core" / "app" / "threat_intel_client.py").read_text()
+    cyfirma_feeds = (ROOT / "threat-intel" / "app" / "cyfirma_feeds.py").read_text()
+    jev_reasoning = (ROOT / "jev-client" / "app" / "reasoning.py").read_text()
+    wazuh_client = (ROOT / "soc-core" / "app" / "wazuh_client.py").read_text()
     if "blmove(QUEUE_RAW_EVENTS, QUEUE_RAW_PROCESSING" in soc_redis:
         ok("SOC Core atomically claims raw events into a processing queue")
     else: fail("SOC Core raw queue is not using an atomic processing claim")
@@ -325,6 +333,15 @@ def audit_section_11():
     if "cursor_getter" in management and "cursor_setter" in management and "M365_CURSOR_PREFIX" in m365_redis:
         ok("M365 uses a durable per-content-type Redis cursor")
     else: fail("M365 durable cursor wiring is incomplete")
+    if "OAuthTokenError" in m365_auth and "except Exception: return None" not in m365_auth:
+        ok("Microsoft OAuth failures are surfaced instead of becoming empty successful polls")
+    else: fail("Microsoft OAuth failures can still be hidden as empty polls")
+    if all(token in m365_defender for token in ("DefenderCollectionError", "_safe_next_link", "graph.microsoft.com")):
+        ok("Defender errors are explicit and Graph pagination cannot forward bearer tokens off-host")
+    else: fail("Defender error or pagination controls are incomplete")
+    if all(token in m365_main for token in ("_m365_poll_lock", "_defender_poll_lock", "_source_health")):
+        ok("M365/Defender polls are serialized and expose per-source health")
+    else: fail("M365/Defender poll concurrency or health reporting is incomplete")
     if all(token in m365_normalizer for token in ("CampaignId", "NetworkMessageId", "InternetMessageId",
                                                    "incident_key", "M365_INCIDENT_WINDOW_SECONDS")):
         ok("M365 TIMailData derives bounded campaign/message incident keys")
@@ -342,11 +359,50 @@ def audit_section_11():
     if "refresh=args.refresh_unavailable" in backfill and "not payload.refresh and cached" in intel_main:
         ok("Unavailable CVE retries can explicitly bypass stale provider cache entries")
     else: fail("Unavailable CVE retry does not bypass the threat-intel cache")
+    if all(token in backfill for token in ("e.normalized", "cached_nvd_results", "--cache-only",
+                                            "--existing-unavailable-only",
+                                            'parser.add_argument("--category", action="append"')):
+        ok("CVE backfill covers normalized events and supports cached, scoped batches")
+    else: fail("CVE backfill discovery or bounded cache-only controls are incomplete")
+    if ("get_recent_provider_result" in intel_db and "NVD_DB_CACHE_TTL_SECONDS" in intel_main and
+            "THREAT_INTEL_CVE_TIMEOUT_SECONDS" in soc_intel_client):
+        ok("Live CVE enrichment reuses persisted NVD evidence with a queue-safe client timeout")
+    else: fail("Live CVE enrichment can still repeat NVD calls or time out behind its rate limiter")
     providers = (ROOT / "threat-intel" / "app" / "providers.py").read_text()
     if all(token in providers for token in ("PROVIDER_CIRCUIT_FAILURE_THRESHOLD", "PROVIDER_CIRCUIT_COOLDOWN_SECONDS",
                                              "provider circuit open after repeated failures")):
         ok("Threat-intel providers have bounded failure circuit breakers")
     else: fail("Threat-intel provider circuit breakers are incomplete")
+    if "summarize_health" in providers and "_runtime_health" in intel_main:
+        ok("Threat-intel health reports unavailable providers and failed enabled feeds")
+    else: fail("Threat-intel health can still hide provider/feed failures")
+    if all(token in intel_db for token in ("ThreadedConnectionPool", "BoundedSemaphore",
+                                            "not conn.closed", "close=bool(conn.closed)")):
+        ok("Threat-intel database access is thread-safe and discards closed connections")
+    else: fail("Threat-intel database pool can reuse closed connections under concurrency")
+    if all(token in cyfirma_feeds for token in ("RESEARCH_AUTH_ENABLED", "_research_item_fields",
+                                                 "title, url, summary, published_at")):
+        ok("CYFIRMA public research JSON is parsed without sending the private API key")
+    else: fail("CYFIRMA research feed parser/auth separation is incomplete")
+    if all(token in cyfirma_feeds for token in ("TAXII_USERNAME", "httpx.BasicAuth", 'params = {"next": next_token}',
+                                                 'data.get("more")')):
+        ok("CYFIRMA TAXII supports documented credentials and next-token pagination")
+    else: fail("CYFIRMA TAXII authentication or pagination is incomplete")
+    env = read_env_keys(ROOT / ".env")
+    try:
+        upstream_timeout = float(env.get("JEV_UPSTREAM_TIMEOUT_SECONDS", "0"))
+        hermes_timeout = float(env.get("HERMES_JEV_TIMEOUT_SECONDS", "0"))
+    except ValueError:
+        upstream_timeout = hermes_timeout = 0
+    if "AI_TIMEOUT_SECONDS" in jev_reasoning and upstream_timeout >= 30 and hermes_timeout > upstream_timeout:
+        ok("Jev and Hermes timeout budgets allow slow remote reasoning to finish")
+    else: fail("Jev/Hermes timeout budgets can terminate valid remote reasoning")
+    if all(token in wazuh_client for token in ("WAZUH_MAX_PAGES", "WAZUH_CURSOR_OVERLAP_SECONDS",
+                                                "_paged_search", "document_cursor")) and \
+            all(token in soc_redis for token in ("get_source_cursor", "set_source_cursor")) and \
+            "_process_wazuh_batch" in soc_worker:
+        ok("Wazuh polling uses bounded pagination and durable post-processing cursors")
+    else: fail("Wazuh polling cursor/pagination controls are incomplete")
 
 def main():
     print("Agentic AI SOC Platform — Audit Verifier (v4)")

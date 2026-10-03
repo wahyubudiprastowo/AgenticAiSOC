@@ -8,8 +8,8 @@ Reliability phase-2 update (2026-10-01 UTC): the live database passed
 enabling four bounded consumers; processing depth equals the four active
 workers, no item is older than ten minutes, and both raw/Hermes dead-letter
 counts are zero. M365 reports all five subscriptions enabled, zero poll errors,
-bounded pagination, and durable cursors. Historical CVE reconciliation now has
-166 distinct structured CVE indicators and zero unavailable CVE links.
+bounded pagination, and durable cursors. Historical CVE reconciliation is now
+staged and measured across every category and normalized event evidence.
 
 Update after accuracy phase 1 (2026-09-30 08:19 UTC): the database held
 979,592 events, 247,582 forwarded events, and 117,600 findings. The earliest
@@ -105,16 +105,16 @@ Attribution**, which remains an assessment and not proof of a campaign.
 
 | Source | Runtime status | Data status | Main gap |
 |---|---|---|---|
-| Wazuh alerts | Active | 159k+ stored Wazuh events | Broad MITRE forwarding produced many no-match events; source/user/action extraction was incomplete historically |
-| Wazuh FIM | Active | 875 events | Generic FIM is detectable; supply-chain classification depends only on package-path keywords |
-| Wazuh vulnerability index | Active | 245+ events | CVE source evidence exists; NVD backfill is additive, while zero-day still cannot be inferred solely from “unfixed” |
+| Wazuh alerts | Active | 261k+ stored Wazuh events at the 2026-10-02 check | Bounded pagination and durable post-processing cursors are active; source/user/action extraction remains incomplete historically |
+| Wazuh FIM | Active | 2.7k+ events at the 2026-10-02 check | Generic FIM is detectable; supply-chain classification still depends on package-path evidence |
+| Wazuh vulnerability index | Active | 5.4k+ events at the 2026-10-02 check | Cursor catch-up recovered records beyond the previous 200-row page; zero-day still cannot be inferred solely from “unfixed” |
 | Direct syslog `36514` | Listener healthy | `received=0` after restart; only test/manual syslog rows exist | Devices still send to Wazuh `514`, not this collector |
-| M365 audit | Active | 872k+ stored events | Subscription/pagination/cursor controls are active; new TIMailData records use bounded incident aggregation while historical findings remain unchanged |
-| Defender XDR | API authorized | Only 6 distinct incidents stored historically | Previous requests omitted `$expand=alerts`, so evidence, IP, user, asset, category, and MITRE were absent |
+| M365 audit | Active | 1.35m+ stored events at the 2026-10-02 check | Subscription/pagination/cursor controls and per-source health are active; new TIMailData records use bounded incident aggregation while historical findings remain unchanged |
+| Defender XDR | API authorized and healthy | 13 stored source events at the 2026-10-02 check | New polls expose OAuth/Graph failures and include expanded alert evidence; older incident rows remain unchanged |
 | CYFIRMA IOC | Active after patch | Live exact IOC match verified | Previous implementation used Bearer auth; this tenant endpoint requires `x-api-key` |
 | CYFIRMA org vulnerability | Not active | 0 records | Configured endpoint returns HTTP 401 for Bearer, `x-api-key`, `api-key`, and `Key`; correct vendor authentication/entitlement is not available in current config |
-| CYFIRMA research | Not active | 0 records | Configured URL is an HTML website protected by web controls, not a JSON API |
-| CYFIRMA TAXII | Disabled | 0 objects | Collection URL and bearer token are empty |
+| CYFIRMA research | Active | 25 records on first 2026-10-02 poll | Uses the vendor's public WordPress JSON `out-of-band` endpoint; private API auth is disabled for this public feed |
+| CYFIRMA TAXII | Disabled | 0 objects | Client now supports documented username/token Basic auth and TAXII next-token pagination; collection ID/URL and credentials still require vendor provisioning |
 | VirusTotal | Rate limited | Intermittent historical results | Current runtime receives HTTP 429 |
 | AbuseIPDB | Authentication failed | Unavailable | Current runtime receives HTTP 401 |
 | CrowdSec CTI | Authorization failed | Watchlist still works locally | Current runtime receives HTTP 403 |
@@ -122,7 +122,7 @@ Attribution**, which remains an assessment and not proof of a campaign.
 | ThreatFox | Active | Live | No material runtime error in the final check |
 | URLhaus | Active | Live | Supports URL/domain, not every IOC type |
 | NVD | Active on CVE lookup | Live CVE metadata verified | Controlled historical backfill uses NVD-only requests and additive idempotent indicator upserts |
-| Jev / 9router | Intermittent; current health degraded | 985 remote-reasoned findings existed in the 2026-10-01 snapshot; fallback continues during failures | Current upstream failures open a fixed 60-second circuit; 9router connection/auth health must be stabilized |
+| Jev / 9router | Active after timeout alignment | 985 historical remote-reasoned findings plus a schema-valid live remote probe on 2026-10-02 | Upstream timeout is 180 seconds and Hermes waits 195 seconds; fixed circuit fallback remains active for real failures |
 | Qdrant | Reachable | 91k+ points | Uses local hash/trigram vectors, not semantic embeddings; `indexed_vectors_count=0`, so current searches are full scans |
 
 ## Why fields are missing
@@ -160,8 +160,11 @@ Attribution**, which remains an assessment and not proof of a campaign.
 - NVD enrichment now works for new CVE-bearing events.
 - Historical CVE findings created before `finding_indicators` persistence were
   reconciled on 2026-10-01 by the controlled NVD-only backfill: 161 candidate
-  CVEs and 187 missing finding/CVE links were processed. Final normal and
-  unavailable-retry dry-runs both report zero candidates. The operation wrote
+  CVEs and 187 missing finding/CVE links were processed. The expanded
+  2026-10-02 scan found additional CVEs in normalized event JSON and categories
+  outside the original scope. Staged cache/network runs left 7,272 complete,
+  1,075 partial, and zero unavailable CVE links; 115 CVEs / 196 missing links
+  from the last full scan remain queued for later batches. The operation wrote
   indicator rows only.
 
 ## Detection coverage by current category
@@ -193,17 +196,19 @@ Attribution**, which remains an assessment and not proof of a campaign.
    receive bounded retry, then dead-letter handling, and startup recovers
    unacknowledged items. A bounded raw worker pool prevents routine records from
    waiting behind one slow enrichment operation.
-2. **Open:** Wazuh polling uses overlapping time windows and fixed result limits
-   without a persistent timestamp/document-ID cursor. Long downtime or bursts
-   beyond the query size can create gaps.
+2. **Resolved:** Wazuh alert, FIM, and vulnerability polling uses ascending,
+   bounded pagination plus Redis timestamp/document-ID cursors. Cursors advance
+   only after successful processing and overlap by a configurable interval for
+   late-indexed records.
 3. **Resolved:** M365 uses POST for missing subscriptions, discovers subscriptions
    that are already enabled, follows bounded `NextPageUri`, and stores one Redis
    cursor per content type. Poll/page/blob errors are explicit in `/stats`. New
    TIMailData evidence is grouped into one finding per bounded incident key;
    member events remain individually stored and linked.
-4. **Partially resolved:** source-specific stats now expose M365 and CYFIRMA
-   failures, but several other collectors still need newest-source timestamp and
-   lag in their health contract.
+4. **Partially resolved:** M365 exposes independent Management Activity and
+   Defender health, and Threat Intel service health now reflects failed enabled
+   providers/feeds. Wazuh and syslog still need newest-source timestamp and lag
+   in a unified health contract.
 5. **Resolved:** Jev fallback is exposed as `reasoning.mode=fallback`, and the
    dashboard marks it degraded instead of remote-AI healthy. Open-circuit traffic
    no longer extends the cooldown indefinitely; one half-open probe runs after
@@ -225,13 +230,9 @@ Attribution**, which remains an assessment and not proof of a campaign.
 
 ### P0 — restore evidence sources and honest status
 
-1. Stabilize the configured 9router upstream connection/authentication. Remote
-   reasoning is proven by 985 stored remote findings, but current failures still
-   trigger an explicit deterministic fallback and degraded health.
-2. Obtain the documented CYFIRMA organization-vulnerability authentication method and entitlement. The existing URL/key combination is rejected independently of common header styles.
-3. Replace the CYFIRMA research webpage URL with a supported JSON/TAXII/feed endpoint or disable the feed flag.
-4. Send a second device syslog destination to port `36514`, or deploy a relay/fanout before Wazuh. Do not bind a second service to Wazuh-owned port `514`.
-5. Replace or re-entitle the credentials/quotas currently returning VirusTotal
+1. Obtain the documented CYFIRMA organization-vulnerability authentication method and entitlement. The existing URL/key combination is rejected independently of common header styles.
+2. Send a second device syslog destination to port `36514`, or deploy a relay/fanout before Wazuh. Do not bind a second service to Wazuh-owned port `514`.
+3. Replace or re-entitle the credentials/quotas currently returning VirusTotal
    429, AbuseIPDB 401, and CrowdSec 403. These remain explicit `unavailable`
    provider results; they are never interpreted as clean IOCs.
 
@@ -239,12 +240,12 @@ Attribution**, which remains an assessment and not proof of a campaign.
 
 Completed: acknowledged Redis delivery with retry/DLQ/recovery; persisted event
 pipeline state; bounded raw consumers; M365 subscription discovery, POST start,
-pagination, cursor, and counters.
+pagination, cursor, explicit source health, and counters; persistent paginated
+Wazuh cursors.
 
 Remaining priority:
 
-1. Add persistent Wazuh cursors using timestamp plus document ID and page through all results.
-2. Make every source health response include last successful poll, last error,
+1. Make every remaining source health response include last successful poll, last error,
    newest source timestamp, and lag.
 
 ### P2 — improve classification accuracy
@@ -282,6 +283,17 @@ Still required:
 - Compound STIX patterns now extract every IOC value instead of only the text after the first equals sign.
 - CYFIRMA refresh failures now have backoff and no longer create a request thread for every event.
 - Defender requests now use `$expand=alerts`, pagination, evidence extraction, source IP, user, affected device, MITRE, categories, and incident URL.
+- Defender OAuth/Graph failures now remain explicit instead of becoming a
+  successful zero-incident poll; pagination cannot send its bearer token to a
+  non-Graph host, polls are serialized, and per-source health is exposed.
+- Wazuh alerts, FIM, and vulnerabilities now use bounded ascending pagination
+  and durable Redis cursors advanced only after successful processing. The first
+  catch-up recovered records that were previously beyond fixed page limits.
+- Threat Intel health now reports failed enabled feeds/providers as degraded
+  without disabling providers that remain live.
+- Threat Intel PostgreSQL access now uses a bounded thread-safe pool and removes
+  closed connections; concurrent Research/feed requests no longer reuse one
+  unsafe `SimpleConnectionPool` connection.
 - Wazuh extracts common nested Windows IP/user/action fields.
 - Wazuh informational events no longer become security signals merely because a MITRE ID exists.
 - Generic syslog transport peers are stored as `observer_ip`, not falsely displayed as attacker IP.
@@ -289,6 +301,14 @@ Still required:
 - Jev's fixed cooldown can no longer be extended indefinitely by incoming
   events; health now exposes circuit state and retry delay, and a single
   half-open probe runs when cooldown expires.
+- Jev's upstream timeout now matches the configured 180-second AI budget and
+  Hermes waits 195 seconds. A live evidence-citing response passed the strict
+  schema in remote mode after deployment.
+- CYFIRMA Research now consumes the public vendor WordPress JSON endpoint,
+  normalizes rendered fields, sorts by publication time, and never sends the
+  private API key to that feed. The first poll persisted 25 articles.
+- CYFIRMA TAXII supports documented username/token Basic authentication and
+  follows `more`/`next` tokens without treating the token as a new URL.
 - Defender `InitialAccess` alerts can route to the M365 identity-compromise skill.
 - Added canonical taxonomy/family/subtype metadata to new findings and strict
   taxonomy validation to Hermes skills and Jev proposals.
@@ -316,16 +336,21 @@ Still required:
   production sensor gaps remain open.
 - `scripts/backfill_cve_indicators.py` adds current NVD metadata to historical
   CVE findings through dry-run-first, NVD-only, idempotent indicator upserts.
-  The completed run left 0 missing candidates and 0 unavailable CVE links.
+  Discovery covers normalized JSON and all categories. Cache-only and bounded
+  network batches reduced existing unavailable indicators to zero; a separately
+  measured missing-only backlog of 115 CVEs / 196 links remains open.
+- Live CVE enrichment reuses persisted NVD evidence for 24 hours and uses a
+  45-second CVE client timeout, preventing NVD's serial public-rate-limit queue
+  from generating avoidable unavailable rows.
 - Repeated threat-intelligence failures now open bounded provider-specific
   circuits, preserving an unavailable verdict while preventing failed APIs from
   continuously occupying the worker pool.
 
 Validation after phase 1: smoke tests confirm all service endpoints are
-reachable; dashboard health reports 7/8 healthy because Jev remote is degraded.
-The audit verifier reports 92 PASS / 0 WARN / 0 FAIL; the 17-category detail audit found
+reachable. Jev remote is healthy after timeout alignment; Threat Intel remains
+explicitly degraded while the organization-vulnerability feed returns HTTP 401.
+The audit verifier reports 103 PASS / 0 WARN / 0 FAIL; the 17-category detail audit found
 data in 16 categories and correctly reported Zero-Day as zero data; Hermes queue
-depth was zero; and no confidence-zero fallback findings remained. Jev remote
-reasoning has produced 985 stored findings but remains intermittent, CYFIRMA
-organization vulnerabilities still return HTTP 401, and those external issues
-remain visible in Settings.
+depth was zero; and no confidence-zero fallback findings remained. CYFIRMA
+organization vulnerabilities still return HTTP 401, and that vendor-side
+authentication/entitlement gap remains visible in Settings.

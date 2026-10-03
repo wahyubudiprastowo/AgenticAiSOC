@@ -12,6 +12,8 @@ WAZUH_VULN_INDEX = os.getenv("WAZUH_VULN_INDEX", "wazuh-states-vulnerabilities-*
 WAZUH_FIM_RULE_GROUP = os.getenv("WAZUH_FIM_RULE_GROUP", "syscheck")
 WAZUH_VULN_RULE_GROUP = os.getenv("WAZUH_VULN_RULE_GROUP", "vulnerability-detector")
 WAZUH_CAPTURE_ALL_LEVELS = os.getenv("WAZUH_CAPTURE_ALL_LEVELS", "true").lower() == "true"
+WAZUH_MAX_PAGES = max(1, int(os.getenv("WAZUH_MAX_PAGES", "25")))
+WAZUH_CURSOR_OVERLAP_SECONDS = max(0, int(os.getenv("WAZUH_CURSOR_OVERLAP_SECONDS", "120")))
 _auth = (WAZUH_INDEXER_USER, WAZUH_INDEXER_PASSWORD)
 def _client(): return httpx.Client(verify=WAZUH_VERIFY_SSL, timeout=20, auth=_auth)
 _MOCK_RULE_BANK = [
@@ -45,53 +47,88 @@ def _mock_vulnerabilities(count=2):
             "vulnerability": {"cve": random.choice(cves), "severity": random.choice(["High", "Critical", "Medium"]),
                                "condition": "Package unfixed" if i == 0 else "Package patched",
                                "package": {"name": "openssl", "version": "1.1.1"}}}} for i in range(count)]
-def fetch_recent_alerts(min_level=None, lookback_minutes=10, size=200):
+
+
+def _parse_timestamp(value) -> datetime | None:
+    if not value: return None
+    try:
+        parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+        if parsed.tzinfo is None: parsed = parsed.replace(tzinfo=timezone.utc)
+        return parsed.astimezone(timezone.utc)
+    except (TypeError, ValueError):
+        return None
+
+
+def _cursor_start(cursor: dict | None, fallback: datetime) -> datetime:
+    parsed = _parse_timestamp((cursor or {}).get("timestamp"))
+    return parsed - timedelta(seconds=WAZUH_CURSOR_OVERLAP_SECONDS) if parsed else fallback
+
+
+def document_cursor(document: dict, *timestamp_paths: str) -> dict | None:
+    source = document.get("_source", document)
+    timestamp = _nested(source, *timestamp_paths)
+    parsed = _parse_timestamp(timestamp)
+    if parsed is None: return None
+    return {"timestamp": parsed.isoformat(), "document_id": str(document.get("_id") or "")}
+
+
+def _paged_search(url: str, query: dict, timestamp_field: str, size: int) -> list[dict]:
+    hits: list[dict] = []
+    with _client() as client:
+        for page in range(WAZUH_MAX_PAGES):
+            body = {**query, "sort": [{timestamp_field: {"order": "asc"}}],
+                    "size": size, "from": page * size, "track_total_hits": False}
+            response = client.post(url, json=body); response.raise_for_status()
+            page_hits = response.json().get("hits", {}).get("hits", [])
+            if not isinstance(page_hits, list): raise ValueError("Wazuh hits must be a list")
+            hits.extend(page_hits)
+            if len(page_hits) < size: break
+    return hits
+
+
+def fetch_recent_alerts(min_level=None, lookback_minutes=10, size=200, cursor: dict | None = None):
     effective_min_level = 1 if WAZUH_CAPTURE_ALL_LEVELS else (min_level or 7)
     if WAZUH_MOCK_MODE: return _mock_alerts(effective_min_level)
-    since = (datetime.now(timezone.utc) - timedelta(minutes=lookback_minutes)).isoformat()
+    end_time = datetime.now(timezone.utc)
+    since = _cursor_start(cursor, end_time - timedelta(minutes=lookback_minutes)).isoformat()
     relevance = [{"range": {"rule.level": {"gte": effective_min_level}}}]
     if not WAZUH_CAPTURE_ALL_LEVELS:
         relevance.extend([{"exists": {"field": "rule.mitre.id"}}, {"term": {"rule.groups": "attack"}}])
     query = {"query": {"bool": {
-                "must": [{"range": {"@timestamp": {"gte": since}}}],
+                "must": [{"range": {"@timestamp": {"gte": since, "lte": end_time.isoformat()}}}],
                 "should": relevance,
                 "minimum_should_match": 1,
                 "must_not": [{"terms": {"rule.groups": [WAZUH_FIM_RULE_GROUP, WAZUH_VULN_RULE_GROUP, "office365"]}}],
-            }},
-             "sort": [{"@timestamp": {"order": "desc"}}], "size": size}
+            }}}
     url = f"{WAZUH_INDEXER_URL.rstrip('/')}/{WAZUH_ALERTS_INDEX}/_search"
     try:
-        with _client() as client:
-            resp = client.post(url, json=query); resp.raise_for_status(); return resp.json().get("hits", {}).get("hits", [])
+        return _paged_search(url, query, "@timestamp", size)
     except Exception: logger.exception("Failed to query Wazuh alerts"); return []
-def fetch_recent_fim_events(lookback_minutes=15, size=100):
+def fetch_recent_fim_events(lookback_minutes=15, size=100, cursor: dict | None = None):
     if WAZUH_MOCK_MODE: return _mock_fim_events()
-    since = (datetime.now(timezone.utc) - timedelta(minutes=lookback_minutes)).isoformat()
-    query = {"query": {"bool": {"must": [{"term": {"rule.groups": WAZUH_FIM_RULE_GROUP}}, {"range": {"@timestamp": {"gte": since}}}]}},
-             "sort": [{"@timestamp": {"order": "desc"}}], "size": size}
+    end_time = datetime.now(timezone.utc)
+    since = _cursor_start(cursor, end_time - timedelta(minutes=lookback_minutes)).isoformat()
+    query = {"query": {"bool": {"must": [{"term": {"rule.groups": WAZUH_FIM_RULE_GROUP}},
+             {"range": {"@timestamp": {"gte": since, "lte": end_time.isoformat()}}}]}}}
     url = f"{WAZUH_INDEXER_URL.rstrip('/')}/{WAZUH_ALERTS_INDEX}/_search"
     try:
-        with _client() as client:
-            resp = client.post(url, json=query); resp.raise_for_status(); return resp.json().get("hits", {}).get("hits", [])
+        return _paged_search(url, query, "@timestamp", size)
     except Exception: logger.exception("Failed to query Wazuh FIM events"); return []
-def fetch_recent_vulnerabilities(lookback_hours=24, size=200):
+def fetch_recent_vulnerabilities(lookback_hours=24, size=200, cursor: dict | None = None):
     if WAZUH_MOCK_MODE: return _mock_vulnerabilities()
-    since = (datetime.now(timezone.utc) - timedelta(hours=lookback_hours)).isoformat()
-    query_modern = {"query": {"range": {"vulnerability.detected_at": {"gte": since}}}, "sort": [{"vulnerability.detected_at": {"order": "desc"}}], "size": size}
+    end_time = datetime.now(timezone.utc)
+    since = _cursor_start(cursor, end_time - timedelta(hours=lookback_hours)).isoformat()
+    query_modern = {"query": {"range": {"vulnerability.detected_at": {"gte": since, "lte": end_time.isoformat()}}}}
     url_modern = f"{WAZUH_INDEXER_URL.rstrip('/')}/{WAZUH_VULN_INDEX}/_search"
     try:
-        with _client() as client:
-            resp = client.post(url_modern, json=query_modern)
-            if resp.status_code == 200:
-                hits = resp.json().get("hits", {}).get("hits", [])
-                if hits: return hits
-    except Exception: pass
-    query_legacy = {"query": {"bool": {"must": [{"term": {"rule.groups": WAZUH_VULN_RULE_GROUP}}, {"range": {"@timestamp": {"gte": since}}}]}},
-                    "sort": [{"@timestamp": {"order": "desc"}}], "size": size}
+        hits = _paged_search(url_modern, query_modern, "vulnerability.detected_at", size)
+        if hits: return hits
+    except Exception: logger.warning("Modern Wazuh vulnerability query failed; trying legacy index")
+    query_legacy = {"query": {"bool": {"must": [{"term": {"rule.groups": WAZUH_VULN_RULE_GROUP}},
+                    {"range": {"@timestamp": {"gte": since, "lte": end_time.isoformat()}}}]}}}
     url_legacy = f"{WAZUH_INDEXER_URL.rstrip('/')}/{WAZUH_ALERTS_INDEX}/_search"
     try:
-        with _client() as client:
-            resp = client.post(url_legacy, json=query_legacy); resp.raise_for_status(); return resp.json().get("hits", {}).get("hits", [])
+        return _paged_search(url_legacy, query_legacy, "@timestamp", size)
     except Exception: logger.exception("Failed to query Wazuh vulnerabilities"); return []
 
 

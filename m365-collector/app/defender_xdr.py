@@ -1,18 +1,50 @@
 from __future__ import annotations
 import hashlib, json, logging, os
 from datetime import datetime, timedelta, timezone
+from urllib.parse import urlsplit
 import httpx
 from .auth import get_graph_token
 logger = logging.getLogger("m365-collector.defender_xdr")
 ENABLED = os.getenv("DEFENDER_XDR_ENABLED", "false").lower() == "true"
 TENANT_ID = os.getenv("DEFENDER_XDR_TENANT_ID", ""); CLIENT_ID = os.getenv("DEFENDER_XDR_CLIENT_ID", ""); CLIENT_SECRET = os.getenv("DEFENDER_XDR_CLIENT_SECRET", "")
 COLLECTION_MODE = os.getenv("DEFENDER_XDR_COLLECTION_MODE", "incidents"); BATCH_SIZE = int(os.getenv("DEFENDER_XDR_BATCH_SIZE", "50"))
-GRAPH_BASE_URL = "https://graph.microsoft.com/v1.0"; _warned_403 = False
+GRAPH_BASE_URL = "https://graph.microsoft.com/v1.0"
+
+
+class DefenderCollectionError(RuntimeError):
+    """Safe, credential-free Defender collection failure."""
+
+
+def _safe_next_link(value: str | None) -> str | None:
+    if not value:
+        return None
+    parsed = urlsplit(value)
+    if parsed.scheme != "https" or (parsed.hostname or "").lower() != "graph.microsoft.com":
+        raise DefenderCollectionError("untrusted Graph pagination URL")
+    return value
+
+
+def _safe_collection_error(exc: Exception) -> str:
+    if isinstance(exc, DefenderCollectionError):
+        return str(exc)
+    if isinstance(exc, httpx.HTTPStatusError):
+        return f"Graph HTTP {exc.response.status_code}"
+    if isinstance(exc, httpx.TimeoutException):
+        return "Graph timeout"
+    if isinstance(exc, httpx.TransportError):
+        return "Graph transport error"
+    if isinstance(exc, (AttributeError, KeyError, ValueError, TypeError)):
+        return "Graph response schema error"
+    return f"Graph {type(exc).__name__}"
+
+
 def fetch_recent_incidents(lookback_minutes=20):
-    global _warned_403
     if not ENABLED: return []
+    if not TENANT_ID or not CLIENT_ID or not CLIENT_SECRET:
+        raise DefenderCollectionError("Defender OAuth configuration incomplete")
+    if COLLECTION_MODE not in {"incidents", "alerts", "alerts_v2"}:
+        raise DefenderCollectionError("unsupported Defender collection mode")
     token = get_graph_token(TENANT_ID, CLIENT_ID, CLIENT_SECRET)
-    if not token: return []
     since = (datetime.now(timezone.utc) - timedelta(minutes=lookback_minutes)).strftime("%Y-%m-%dT%H:%M:%SZ")
     endpoint = "/security/incidents" if COLLECTION_MODE == "incidents" else "/security/alerts_v2"
     params = {"$filter": f"lastUpdateDateTime ge {since}", "$top": BATCH_SIZE,
@@ -20,15 +52,20 @@ def fetch_recent_incidents(lookback_minutes=20):
     if COLLECTION_MODE == "incidents": params["$expand"] = "alerts"
     try:
         with httpx.Client(timeout=20) as client:
-            url = f"{GRAPH_BASE_URL}{endpoint}"; results = []
+            url = f"{GRAPH_BASE_URL}{endpoint}"; results = []; page = 0
             while url and len(results) < BATCH_SIZE:
-                resp = client.get(url, params=params if not results else None,
+                resp = client.get(url, params=params if page == 0 else None,
                                   headers={"Authorization": f"Bearer {token}"})
-                if resp.status_code == 403: return []
-                resp.raise_for_status(); data = resp.json(); results.extend(data.get("value", []))
-                url = data.get("@odata.nextLink")
+                resp.raise_for_status(); data = resp.json()
+                if not isinstance(data, dict) or not isinstance(data.get("value", []), list):
+                    raise DefenderCollectionError("Graph response schema error")
+                results.extend(data.get("value", []))
+                url = _safe_next_link(data.get("@odata.nextLink")); page += 1
             return results[:BATCH_SIZE]
-    except Exception: return []
+    except Exception as exc:
+        detail = _safe_collection_error(exc)
+        logger.warning("Defender collection failed: %s", detail)
+        raise DefenderCollectionError(detail) from exc
 def defender_incident_to_normalized(incident):
     severity_map = {"informational": "low", "low": "low", "medium": "medium", "high": "high"}
     severity = severity_map.get(str(incident.get("severity", "medium")).lower(), "medium")

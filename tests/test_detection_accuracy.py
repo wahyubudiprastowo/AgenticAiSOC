@@ -14,7 +14,15 @@ ROOT = Path(__file__).resolve().parents[1]
 try:
     import httpx  # noqa: F401
 except ModuleNotFoundError:
-    sys.modules["httpx"] = types.SimpleNamespace(Client=object)
+    class _HTTPStatusError(Exception):
+        def __init__(self, message, *, request=None, response=None):
+            super().__init__(message); self.request = request; self.response = response
+    class _TimeoutException(Exception): pass
+    class _TransportError(Exception): pass
+    sys.modules["httpx"] = types.SimpleNamespace(
+        Client=object, HTTPStatusError=_HTTPStatusError,
+        TimeoutException=_TimeoutException, TransportError=_TransportError,
+        BasicAuth=lambda username, password: (username, password))
 
 
 def load_module(name: str, relative_path: str):
@@ -23,6 +31,16 @@ def load_module(name: str, relative_path: str):
     assert spec and spec.loader
     spec.loader.exec_module(module)
     return module
+
+
+def make_http_status_error(httpx_module, status: int, method: str, url: str):
+    if hasattr(httpx_module, "Request"):
+        request = httpx_module.Request(method, url)
+        response = httpx_module.Response(status, request=request)
+    else:
+        request = types.SimpleNamespace(method=method, url=url)
+        response = types.SimpleNamespace(status_code=status)
+    return httpx_module.HTTPStatusError("request failed", request=request, response=response)
 
 
 m365 = load_module("m365_normalizer_test", "m365-collector/app/normalizer.py")
@@ -34,15 +52,36 @@ management_auth.get_management_api_token = lambda *_: "test-token"
 sys.modules["m365_management_test"] = management_package
 sys.modules["m365_management_test.auth"] = management_auth
 m365_management = load_module("m365_management_test.management_api", "m365-collector/app/management_api.py")
+
+m365_auth = load_module("m365_auth_test", "m365-collector/app/auth.py")
+defender_package = types.ModuleType("m365_defender_test")
+defender_package.__path__ = []
+defender_auth = types.ModuleType("m365_defender_test.auth")
+defender_auth.get_graph_token = lambda *_: "test-token"
+sys.modules["m365_defender_test"] = defender_package
+sys.modules["m365_defender_test.auth"] = defender_auth
+m365_defender = load_module("m365_defender_test.defender_xdr", "m365-collector/app/defender_xdr.py")
 syslog = load_module("syslog_normalizer_test", "syslog-collector/app/normalizer.py")
 wazuh = load_module("wazuh_client_test", "soc-core/app/wazuh_client.py")
 skills = load_module("skill_loader_test", "hermes/app/skill_loader.py")
 providers = load_module("providers_test", "threat-intel/app/providers.py")
+cyfirma_package = types.ModuleType("cyfirma_feed_test")
+cyfirma_package.__path__ = []
+cyfirma_db = types.ModuleType("cyfirma_feed_test.db")
+cyfirma_db.upsert_research_item = lambda **_: True
+cyfirma_db.upsert_org_vulnerability = lambda **_: True
+cyfirma_redis = types.ModuleType("cyfirma_feed_test.redis_client")
+cyfirma_redis.push_raw_event = lambda *_: None
+sys.modules["cyfirma_feed_test"] = cyfirma_package
+sys.modules["cyfirma_feed_test.db"] = cyfirma_db
+sys.modules["cyfirma_feed_test.redis_client"] = cyfirma_redis
+cyfirma_feeds = load_module("cyfirma_feed_test.cyfirma_feeds", "threat-intel/app/cyfirma_feeds.py")
 dashboard_agg = load_module("dashboard_aggregations_test", "dashboard/app/aggregations.py")
 memory = load_module("hermes_memory_test", "hermes/app/memory.py")
 detections = load_module("soc_detections_test", "soc-core/app/detections.py")
 ioc_extractor = load_module("soc_ioc_extractor_test", "soc-core/app/ioc_extractor.py")
 filters = load_module("soc_filters_test", "soc-core/app/filters.py")
+threat_intel_client = load_module("soc_threat_intel_client_test", "soc-core/app/threat_intel_client.py")
 jev_circuit = load_module("jev_circuit_test", "jev-client/app/circuit.py")
 
 
@@ -158,6 +197,56 @@ class M365ManagementApiTests(unittest.TestCase):
         self.assertEqual(capped.isoformat(), "2026-09-30T12:00:00+00:00")
 
 
+class M365AuthenticationTests(unittest.TestCase):
+    def test_oauth_http_failure_is_not_returned_as_empty_token(self):
+        failed = make_http_status_error(
+            m365_auth.httpx, 401, "POST", "https://login.microsoftonline.com/test/oauth2/v2.0/token")
+        mocked_response = mock.Mock()
+        mocked_response.raise_for_status.side_effect = failed
+        client = mock.MagicMock()
+        client.__enter__.return_value.post.return_value = mocked_response
+        with mock.patch.object(m365_auth.httpx, "Client", return_value=client):
+            with self.assertRaisesRegex(m365_auth.OAuthTokenError, "OAuth HTTP 401"):
+                m365_auth.get_token("tenant", "client", "secret", "scope/.default")
+
+
+class DefenderCollectorTests(unittest.TestCase):
+    def test_graph_next_link_cannot_exfiltrate_bearer_token(self):
+        valid = "https://graph.microsoft.com/v1.0/security/incidents?$skiptoken=next"
+        self.assertEqual(m365_defender._safe_next_link(valid), valid)
+        with self.assertRaisesRegex(m365_defender.DefenderCollectionError, "untrusted"):
+            m365_defender._safe_next_link("https://example.invalid/collect-token")
+
+    def test_graph_403_is_reported_as_collection_error(self):
+        failed = make_http_status_error(
+            m365_defender.httpx, 403, "GET", "https://graph.microsoft.com/v1.0/security/incidents")
+        mocked_response = mock.Mock()
+        mocked_response.raise_for_status.side_effect = failed
+        client = mock.MagicMock()
+        client.__enter__.return_value.get.return_value = mocked_response
+        with mock.patch.object(m365_defender, "ENABLED", True), \
+             mock.patch.object(m365_defender, "TENANT_ID", "tenant"), \
+             mock.patch.object(m365_defender, "CLIENT_ID", "client"), \
+             mock.patch.object(m365_defender, "CLIENT_SECRET", "secret"), \
+             mock.patch.object(m365_defender.httpx, "Client", return_value=client):
+            with self.assertRaisesRegex(m365_defender.DefenderCollectionError, "Graph HTTP 403"):
+                m365_defender.fetch_recent_incidents()
+
+    def test_graph_response_requires_list_value(self):
+        mocked_response = mock.Mock()
+        mocked_response.raise_for_status.return_value = None
+        mocked_response.json.return_value = {"value": "not-a-list"}
+        client = mock.MagicMock()
+        client.__enter__.return_value.get.return_value = mocked_response
+        with mock.patch.object(m365_defender, "ENABLED", True), \
+             mock.patch.object(m365_defender, "TENANT_ID", "tenant"), \
+             mock.patch.object(m365_defender, "CLIENT_ID", "client"), \
+             mock.patch.object(m365_defender, "CLIENT_SECRET", "secret"), \
+             mock.patch.object(m365_defender.httpx, "Client", return_value=client):
+            with self.assertRaisesRegex(m365_defender.DefenderCollectionError, "schema"):
+                m365_defender.fetch_recent_incidents()
+
+
 class ProviderCircuitTests(unittest.TestCase):
     def test_nvd_without_api_key_is_configured_before_first_live_check(self):
         with providers._provider_runtime_lock:
@@ -194,6 +283,28 @@ class ProviderCircuitTests(unittest.TestCase):
             providers.PROVIDER_CIRCUIT_FAILURE_THRESHOLD = original_threshold
             providers.PROVIDER_CIRCUIT_COOLDOWN_SECONDS = original_cooldown
 
+    def test_health_summary_reports_partial_provider_and_failed_feed(self):
+        summary = providers.summarize_health(
+            {
+                "one": {"enabled": True, "mode": "live"},
+                "two": {"enabled": True, "mode": "unavailable"},
+                "off": {"enabled": False, "mode": "disabled"},
+            },
+            {"org_vuln_config_status": "authentication_failed",
+             "research_config_status": "disabled"},
+        )
+        self.assertEqual(summary["status"], "degraded")
+        self.assertEqual(summary["providers"]["live"], 1)
+        self.assertEqual(summary["providers"]["unavailable"], ["two"])
+        self.assertEqual(summary["feed_failures"], ["cyfirma_org_vulnerability"])
+
+    def test_health_summary_is_ok_before_configured_providers_are_exercised(self):
+        summary = providers.summarize_health(
+            {"one": {"enabled": True, "mode": "configured"}},
+            {"org_vuln_config_status": "disabled", "research_config_status": "disabled"},
+        )
+        self.assertEqual(summary["status"], "ok")
+
 
 class JevCircuitTests(unittest.TestCase):
     def test_open_circuit_does_not_extend_deadline_for_each_event(self):
@@ -217,6 +328,34 @@ class JevCircuitTests(unittest.TestCase):
 
 
 class SourceNormalizerTests(unittest.TestCase):
+    def test_wazuh_cursor_uses_overlap_and_preserves_document_id(self):
+        from datetime import datetime, timezone
+        fallback = datetime(2026, 10, 1, 11, 0, tzinfo=timezone.utc)
+        with mock.patch.object(wazuh, "WAZUH_CURSOR_OVERLAP_SECONDS", 120):
+            start = wazuh._cursor_start({"timestamp": "2026-10-01T12:00:00Z"}, fallback)
+        self.assertEqual(start.isoformat(), "2026-10-01T11:58:00+00:00")
+        cursor = wazuh.document_cursor(
+            {"_id": "wazuh-document-1", "_source": {"@timestamp": "2026-10-01T12:00:01Z"}},
+            "@timestamp")
+        self.assertEqual(cursor["document_id"], "wazuh-document-1")
+        self.assertEqual(cursor["timestamp"], "2026-10-01T12:00:01+00:00")
+
+    def test_wazuh_paged_search_reads_every_bounded_page_in_ascending_order(self):
+        first = mock.Mock(); first.raise_for_status.return_value = None
+        first.json.return_value = {"hits": {"hits": [{"_id": "1"}, {"_id": "2"}]}}
+        second = mock.Mock(); second.raise_for_status.return_value = None
+        second.json.return_value = {"hits": {"hits": [{"_id": "3"}]}}
+        client = mock.MagicMock()
+        client.__enter__.return_value.post.side_effect = [first, second]
+        with mock.patch.object(wazuh, "_client", return_value=client), \
+             mock.patch.object(wazuh, "WAZUH_MAX_PAGES", 5):
+            hits = wazuh._paged_search("https://wazuh.invalid/index/_search",
+                                       {"query": {"match_all": {}}}, "@timestamp", 2)
+        self.assertEqual([hit["_id"] for hit in hits], ["1", "2", "3"])
+        requests = [call.kwargs["json"] for call in client.__enter__.return_value.post.call_args_list]
+        self.assertEqual([request["from"] for request in requests], [0, 2])
+        self.assertEqual(requests[0]["sort"], [{"@timestamp": {"order": "asc"}}])
+
     def test_fortigate_passed_application_is_not_intrusion(self):
         event = syslog.normalize_syslog_line('type=utm subtype=app-ctrl action=pass msg="App passed by firewall"', "fortigate")
         self.assertEqual(event["type"], "generic")
@@ -386,7 +525,73 @@ class IOCExtractionTests(unittest.TestCase):
         self.assertNotIn(("hash", "a" * 64), values)
 
 
+class ThreatIntelClientTests(unittest.TestCase):
+    def test_cve_enrichment_uses_longer_timeout_than_other_iocs(self):
+        response = mock.Mock()
+        response.raise_for_status.return_value = None
+        response.json.return_value = {"enrichment_status": "complete"}
+        client = mock.MagicMock()
+        client.__enter__.return_value.post.return_value = response
+        with mock.patch.object(threat_intel_client.httpx, "Client", return_value=client) as constructor:
+            threat_intel_client.enrich_ioc("CVE-2024-1086", "cve")
+            self.assertEqual(constructor.call_args.kwargs["timeout"],
+                             threat_intel_client.THREAT_INTEL_CVE_TIMEOUT_SECONDS)
+            threat_intel_client.enrich_ioc("198.51.100.10", "ip")
+            self.assertEqual(constructor.call_args.kwargs["timeout"],
+                             threat_intel_client.THREAT_INTEL_TIMEOUT_SECONDS)
+
+
 class ThreatIntelSafetyTests(unittest.TestCase):
+    def test_cyfirma_wordpress_research_fields_are_normalized(self):
+        fields = cyfirma_feeds._research_item_fields({
+            "date_gmt": "2026-10-02T01:02:03",
+            "link": "https://www.cyfirma.com/research/example/",
+            "title": {"rendered": "Threat &amp; Risk"},
+            "excerpt": {"rendered": "<p>Observed <strong>activity</strong>.</p>"},
+        })
+        self.assertEqual(fields, (
+            "Threat & Risk", "https://www.cyfirma.com/research/example/",
+            "Observed activity.", "2026-10-02T01:02:03Z"))
+
+    def test_cyfirma_public_research_poll_does_not_send_private_key(self):
+        response = mock.Mock()
+        response.headers = {"content-type": "application/json"}
+        response.raise_for_status.return_value = None
+        response.json.return_value = [{
+            "date_gmt": "2026-10-02T01:02:03", "link": "https://www.cyfirma.com/research/example/",
+            "title": {"rendered": "Example"}, "excerpt": {"rendered": "<p>Summary</p>"},
+        }]
+        client = mock.MagicMock()
+        client.__enter__.return_value.get.return_value = response
+        with mock.patch.object(cyfirma_feeds, "RESEARCH_ENABLED", True), \
+             mock.patch.object(cyfirma_feeds, "RESEARCH_URL", "https://www.cyfirma.com/wp-json/test"), \
+             mock.patch.object(cyfirma_feeds, "RESEARCH_AUTH_ENABLED", False), \
+             mock.patch.object(cyfirma_feeds.httpx, "Client", return_value=client), \
+             mock.patch.object(cyfirma_feeds.db, "upsert_research_item", return_value=True):
+            self.assertEqual(cyfirma_feeds.poll_research_once(), 1)
+        headers = client.__enter__.return_value.get.call_args.kwargs["headers"]
+        self.assertNotIn("x-api-key", {key.lower() for key in headers})
+
+    def test_cyfirma_taxii_uses_next_token_on_same_collection_url(self):
+        first = mock.Mock(); first.raise_for_status.return_value = None
+        first.json.return_value = {"objects": [{"id": "indicator--1"}], "more": True, "next": "token-2"}
+        second = mock.Mock(); second.raise_for_status.return_value = None
+        second.json.return_value = {"objects": [{"id": "indicator--2"}], "more": False}
+        client = mock.MagicMock()
+        client.__enter__.return_value.get.side_effect = [first, second]
+        with mock.patch.object(cyfirma_feeds, "TAXII_ENABLED", True), \
+             mock.patch.object(cyfirma_feeds, "TAXII_COLLECTION_URL", "https://taxii2.cyfirma.com/root/collections/id/objects/"), \
+             mock.patch.object(cyfirma_feeds, "TAXII_USERNAME", "user"), \
+             mock.patch.object(cyfirma_feeds, "TAXII_PASSWORD", "token"), \
+             mock.patch.object(cyfirma_feeds, "TAXII_BEARER_TOKEN", ""), \
+             mock.patch.object(cyfirma_feeds, "TAXII_MAX_PAGES", 2), \
+             mock.patch.object(cyfirma_feeds.httpx, "Client", return_value=client):
+            self.assertEqual(cyfirma_feeds.poll_taxii_once(), 2)
+        calls = client.__enter__.return_value.get.call_args_list
+        self.assertEqual(calls[0].args[0], calls[1].args[0])
+        self.assertIsNone(calls[0].kwargs["params"])
+        self.assertEqual(calls[1].kwargs["params"], {"next": "token-2"})
+
     def test_cyfirma_compound_stix_pattern_extracts_each_indicator(self):
         values = providers._extract_stix_pattern_values(
             "[file:hashes.md5 = 'abc' OR file:hashes.'SHA-256' = 'def' OR ipv4-addr:value = '198.51.100.10']")

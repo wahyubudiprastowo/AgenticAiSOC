@@ -11,7 +11,7 @@ chmod 600 .env
 ./scripts/verify_environment.sh
 docker compose up -d --build
 ./scripts/smoke_test.sh
-python3 scripts/audit_verify.py      # expect: 92 PASS / 0 WARN / 0 FAIL
+python3 scripts/audit_verify.py      # expect: 103 PASS / 0 WARN / 0 FAIL
 ./scripts/simulate_events.sh all
 ```
 Open **http://localhost:38080** for the dashboard.
@@ -71,6 +71,12 @@ Service health refreshes in the browser every 15 seconds. Each probe retries
 once, and a brief timeout after a successful probe is shown as `recovering`
 for `DASHBOARD_HEALTH_GRACE_SECONDS` rather than as a false outage. The current
 probe timeout is controlled by `DASHBOARD_HEALTH_TIMEOUT_SECONDS`.
+M365 health reports Management Activity and Defender independently; OAuth,
+Graph permission, timeout, schema, and stale-poll failures cannot appear as a
+successful empty poll. Threat Intel reports `degraded` when an enabled provider
+or feed is unavailable while continuing to use providers that remain live. Its
+PostgreSQL access uses a bounded thread-safe pool and discards closed
+connections instead of returning intermittent Research/API errors.
 
 Browser-local custom times are converted to ISO/UTC before they are
 sent to the API. The end timestamp is inclusive. Example:
@@ -150,6 +156,10 @@ Jev's upstream circuit uses a fixed cooldown: traffic received while it is open
 does not extend the deadline. After cooldown, one half-open probe tests the
 remote provider; success closes the circuit and failure starts a new cooldown.
 The health response exposes `circuit_state` and `retry_after_seconds`.
+`JEV_UPSTREAM_TIMEOUT_SECONDS=180` matches the configured remote AI budget and
+`HERMES_JEV_TIMEOUT_SECONDS=195` leaves enough time for Jev to return and
+validate a slow response. A live schema-valid probe on 2026-10-02 completed in
+remote mode; fallback remains available for actual upstream failures.
 
 Raw and filtered Redis queues use atomic claim-to-processing moves, explicit
 ACK, bounded retry, dead-letter queues, and startup recovery of unacknowledged
@@ -157,6 +167,14 @@ items. `SOC_RAW_EVENT_WORKERS` bounds concurrent raw-event consumers; provider
 fan-out remains independently bounded by `SOC_IOC_ENRICH_WORKERS` and
 `INTEL_PROVIDER_WORKERS`. Queue depth, in-flight count, and dead-letter count
 are exposed in the service statistics endpoints.
+
+Wazuh alerts, FIM, and vulnerability polling use ascending bounded pagination
+instead of only the newest fixed-size page. A timestamp/document cursor is
+persisted in Redis only after each document has completed processing. The next
+poll overlaps the cursor by `WAZUH_CURSOR_OVERLAP_SECONDS` to capture late
+indexing; PostgreSQL event identity makes that overlap idempotent. Set
+`WAZUH_MAX_PAGES` to bound work per polling cycle. Existing event and finding
+rows are never rewritten by cursor advancement.
 
 ## Canonical taxonomy and historical findings
 
@@ -198,6 +216,13 @@ and one of these enrichment states: `complete`, `partial`, `stale_cache`, or
 failures never become clean or malicious mock verdicts when mock mode is off.
 The Settings page reports tested runtime state per provider and IOC type; an API
 key being configured is not presented as proof that the provider is live.
+
+CYFIRMA Research uses the vendor's public WordPress JSON endpoint
+`/wp-json/wp/v2/out-of-band`; nested rendered fields are converted to plain text
+and sorted by publication time. The private CYFIRMA API key is not sent to this
+public feed. CYFIRMA TAXII supports either the documented username/token Basic
+authentication or the legacy bearer option and follows TAXII `more`/`next`
+tokens on the same configured collection objects URL.
 
 CVE indicators are checked against NVD API 2.0 and OTX. The persisted NVD
 provider evidence includes CVSS version/score/severity, NVD status, published
@@ -241,13 +266,31 @@ sudo docker compose exec -T soc-core \
   python /app/scripts/backfill_cve_indicators.py
 sudo docker compose exec -T soc-core \
   python /app/scripts/backfill_cve_indicators.py --apply
+
+# Fast retry: use persisted live NVD evidence and make no network calls.
+sudo docker compose exec -T soc-core \
+  python /app/scripts/backfill_cve_indicators.py --apply --cache-only \
+  --existing-unavailable-only
+
+# Bounded network retry for rows that still lack live NVD evidence.
+sudo docker compose exec -T soc-core \
+  python /app/scripts/backfill_cve_indicators.py --apply \
+  --existing-unavailable-only --max-cves 25 --delay 6.2
 ```
 
 New events are linked automatically. NVD's public rate limit is enforced across
-the Threat Intel process; `NVD_API_KEY` can be set to use an issued higher quota.
-The 2026-10-01 historical run reconciled all 161 candidate CVEs (187
-finding/CVE links); both the normal and unavailable-retry dry-runs now return
-zero candidates.
+the Threat Intel process; recent live NVD evidence is reused from PostgreSQL for
+24 hours. CVE requests have a longer client timeout than other IOC types so the
+serial public-rate-limit queue does not create false `unavailable` results.
+
+The original 2026-10-01 run reconciled 161 CVEs / 187 finding links. A broader
+2026-10-02 audit then added `events.normalized` and every category to discovery;
+it exposed a larger legacy backlog that the earlier category-limited run had
+missed. Cache-only and bounded network batches reduced existing CVE indicators
+to **7,272 complete, 1,075 partial, and 0 unavailable** at the verification
+checkpoint. The last full missing-indicator scan still found 115 CVEs / 196
+finding links with no indicator row; those remain a staged backlog and are not
+claimed as complete. Source events and findings were not updated or deleted.
 
 ## M365 collection correctness
 
@@ -351,7 +394,7 @@ agentic-soc-platform/
 ├── database/init.sql
 ├── prompts/
 └── scripts/
-    ├── audit_verify.py             # 11 sections, 92 checks
+    ├── audit_verify.py             # 11 sections, 98 checks
     ├── verify_environment.sh
     ├── smoke_test.sh
     └── simulate_events.sh

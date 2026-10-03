@@ -1,6 +1,6 @@
 # Agentic AI SOC Platform — Coordination Audit Report (v4)
 
-**Status:** 92 PASS / 0 WARN / 0 FAIL
+**Status:** 103 PASS / 0 WARN / 0 FAIL
 **Verify anytime:** `python3 scripts/audit_verify.py`
 
 ## Summary
@@ -31,7 +31,12 @@
 - M365 correctness: existing subscriptions are discovered before start calls,
   missing subscriptions use POST, content listing follows bounded `NextPageUri`
   pagination, and each content type has a durable Redis cursor plus status
-  counters.
+  counters. OAuth and Defender Graph errors are surfaced, Graph pagination is
+  host-restricted, overlapping manual/scheduled polls are serialized, and
+  health is reported separately for Management Activity and Defender.
+- Wazuh loss prevention: alerts, FIM, and vulnerability queries now page in
+  ascending order and persist post-processing Redis cursors with a late-arrival
+  overlap. Cursor updates do not modify historical database rows.
 - M365 incident aggregation: new TIMailData evidence uses a hashed, bounded
   campaign/message/user-time key. All source records remain stored while one
   finding links the incident members and only its first record enters Hermes/Jev.
@@ -42,19 +47,34 @@
   efficacy claim is inferred from routing tests.
 - Historical CVE enrichment is additive and idempotent. The backfill is dry-run
   by default and writes only `finding_indicators`; event and finding records are
-  never updated or deleted. The completed run reconciled 161 CVEs / 187 links;
-  final normal and unavailable-retry dry-runs both report zero candidates.
+  never updated or deleted. Discovery now covers normalized event JSON and every
+  category, with cache-only, category-scoped, and bounded network batches. At
+  the 2026-10-02 checkpoint the database had 7,272 complete, 1,075 partial, and
+  zero unavailable CVE links. The last full scan still identified 115 CVEs / 196
+  links without an indicator row, so that missing-only backlog remains open.
+- Live CVE enrichment reuses persisted NVD evidence for 24 hours and gives CVE
+  requests enough time to wait behind NVD's serial rate limiter. A deployed
+  cache probe returned complete live evidence from PostgreSQL in 0.097 seconds.
 - Runtime truthfulness: Settings now separates configured, live, partial,
   stale-cache, and unavailable intelligence integrations. Upstream HTTP/auth/rate
-  failures no longer appear as healthy provider results.
+  failures no longer appear as healthy provider results. Threat Intel service
+  health is degraded when an enabled provider/feed fails, while live providers
+  remain available.
+- Threat Intel database resilience: concurrent feed/UI requests now use a
+  bounded `ThreadedConnectionPool`; closed connections are discarded and
+  rollback is attempted only on an open connection.
 - Provider protection: repeated 429/auth/timeout results open a bounded
   provider-specific circuit. Calls resume after cooldown while findings retain
   an explicit unavailable result during the open interval.
 - Jev recovery: events arriving during an open upstream circuit no longer reset
   its cooldown. One half-open probe is admitted after the fixed deadline. The
   2026-10-01 database snapshot contains 985 remote-reasoned findings, proving
-  that remote reasoning works intermittently even though current health may
-  degrade to explicit fallback when 9router fails.
+  that remote reasoning works. Timeout budgets are now aligned at 180 seconds
+  upstream and 195 seconds from Hermes; a live schema-valid probe completed in
+  remote mode after the patch.
+- CYFIRMA Research now ingests the vendor's public WordPress JSON feed without
+  sending the private API key. The first poll persisted 25 articles. TAXII now
+  supports username/token Basic auth and correct next-token pagination.
 - Accuracy phase 1: one versioned registry now controls 17 stable categories and
   their subtypes across SOC Core, Hermes, Jev, dashboard, and audit validation.
   Endpoint Discovery, web-exploit subtypes, and identity-attack subtypes are no
@@ -110,4 +130,4 @@ honestly labeled manual-ingest-only.
 ```bash
 python3 scripts/audit_verify.py
 ```
-Expected: `SUMMARY: 92 PASS, 0 WARN, 0 FAIL`.
+Expected: `SUMMARY: 103 PASS, 0 WARN, 0 FAIL`.

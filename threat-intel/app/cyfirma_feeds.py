@@ -1,5 +1,5 @@
 from __future__ import annotations
-import logging, os, time, uuid
+import html, logging, os, re, time, uuid
 from datetime import datetime, timedelta, timezone
 import httpx
 from . import db
@@ -14,9 +14,11 @@ ORG_VULN_INTERVAL_SECONDS = int(os.getenv("CYFIRMA_ORG_VULN_INTERVAL_SECONDS", "
 ORG_VULN_LOOKBACK_DAYS = int(os.getenv("CYFIRMA_ORG_VULN_LOOKBACK_DAYS", "30")); ORG_VULN_PAGE_SIZE = int(os.getenv("CYFIRMA_ORG_VULN_PAGE_SIZE", "50"))
 RESEARCH_ENABLED = os.getenv("CYFIRMA_RESEARCH_ENABLED", "false").lower() == "true"; RESEARCH_URL = os.getenv("CYFIRMA_RESEARCH_URL", "")
 RESEARCH_API_KEY_HEADER = os.getenv("CYFIRMA_RESEARCH_API_KEY_HEADER", CYFIRMA_API_KEY_HEADER)
+RESEARCH_AUTH_ENABLED = os.getenv("CYFIRMA_RESEARCH_AUTH_ENABLED", "false").lower() == "true"
 RESEARCH_INTERVAL_SECONDS = int(os.getenv("CYFIRMA_RESEARCH_INTERVAL_SECONDS", "21600")); RESEARCH_MAX_ITEMS = int(os.getenv("CYFIRMA_RESEARCH_MAX_ITEMS", "25"))
 TAXII_ENABLED = os.getenv("CYFIRMA_TAXII_ENABLED", "false").lower() == "true"
 TAXII_COLLECTION_URL = os.getenv("CYFIRMA_TAXII_COLLECTION_URL", ""); TAXII_BEARER_TOKEN = os.getenv("CYFIRMA_TAXII_BEARER_TOKEN", "")
+TAXII_USERNAME = os.getenv("CYFIRMA_TAXII_USERNAME", ""); TAXII_PASSWORD = os.getenv("CYFIRMA_TAXII_PASSWORD", "")
 TAXII_MAX_PAGES = int(os.getenv("CYFIRMA_TAXII_MAX_PAGES", "2"))
 _ZERO_DAY_MARKERS = ("zero-day", "zero day", "0-day", "0day", "actively exploited", "in the wild", "no patch")
 _stats = {"org_vuln_polls": 0, "org_vuln_new": 0, "org_vuln_errors": 0, "org_vuln_zero_day_count": 0,
@@ -36,13 +38,18 @@ def _configuration_status(enabled: bool, url: str, key: str = "") -> str:
     return "configured"
 def get_stats() -> dict:
     org_status = _configuration_status(ORG_VULN_ENABLED, ORG_VULN_URL, ORG_VULN_API_KEY)
-    research_status = _configuration_status(RESEARCH_ENABLED, RESEARCH_URL, CYFIRMA_API_KEY)
+    research_status = _configuration_status(
+        RESEARCH_ENABLED, RESEARCH_URL, CYFIRMA_API_KEY if RESEARCH_AUTH_ENABLED else "public_feed")
+    taxii_credentials = TAXII_BEARER_TOKEN or (TAXII_PASSWORD if TAXII_USERNAME else "")
+    taxii_status = _configuration_status(TAXII_ENABLED, TAXII_COLLECTION_URL, taxii_credentials)
     if org_status == "configured" and _stats["org_vuln_last_error"] in ("HTTP 401", "HTTP 403"):
         org_status = "authentication_failed"
     if research_status == "configured" and _stats["research_last_error"] == "invalid_json_endpoint":
         research_status = "invalid_json_endpoint"
+    if taxii_status == "configured" and _stats["taxii_last_error"]:
+        taxii_status = "runtime_error"
     return {**_stats, "org_vuln_config_status": org_status,
-            "research_config_status": research_status}
+            "research_config_status": research_status, "taxii_config_status": taxii_status}
 def _safe_error(exc: Exception) -> str:
     if isinstance(exc, httpx.HTTPStatusError): return f"HTTP {exc.response.status_code}"
     if isinstance(exc, ValueError) and "JSON" in str(exc): return "invalid_json_endpoint"
@@ -94,17 +101,21 @@ def poll_research_once() -> int:
     _stats["research_polls"] += 1
     try:
         with httpx.Client(timeout=30, verify=CYFIRMA_VERIFY_SSL) as client:
-            headers = _auth_headers(RESEARCH_API_KEY_HEADER, CYFIRMA_API_KEY)
+            headers = {"Accept": "application/json", "User-Agent": "AgenticSOC/1.0"}
+            if RESEARCH_AUTH_ENABLED:
+                headers.update(_auth_headers(RESEARCH_API_KEY_HEADER, CYFIRMA_API_KEY))
             resp = client.get(RESEARCH_URL, headers=headers); resp.raise_for_status()
             content_type = resp.headers.get("content-type", "").lower()
             if "json" not in content_type:
                 raise ValueError("configured research URL is not a JSON API endpoint")
             try: data = resp.json()
             except ValueError as exc: raise ValueError("invalid JSON research response") from exc
-            items = data.get("items", data.get("articles", data if isinstance(data, list) else []))
+            items = data.get("items", data.get("articles", [])) if isinstance(data, dict) else data
+            if not isinstance(items, list): raise ValueError("invalid JSON research response")
             for item in items[:RESEARCH_MAX_ITEMS]:
-                title = item.get("title", "Untitled"); url = item.get("url", item.get("link", ""))
-                summary = item.get("summary", item.get("description", "")); published_at = item.get("published_at") or item.get("date")
+                if not isinstance(item, dict): continue
+                title, url, summary, published_at = _research_item_fields(item)
+                if not url: continue
                 if db.upsert_research_item(title=title, url=url, summary=summary, published_at=published_at, raw_payload=item): new_count += 1
         _stats["research_new"] += new_count
         _stats["research_last_success"] = datetime.now(timezone.utc).isoformat(); _stats["research_last_error"] = None
@@ -115,17 +126,42 @@ def poll_research_once() -> int:
 def research_loop() -> None:
     if not RESEARCH_ENABLED: return
     while True: poll_research_once(); time.sleep(RESEARCH_INTERVAL_SECONDS)
+
+
+def _plain_research_text(value) -> str:
+    if isinstance(value, dict): value = value.get("rendered", "")
+    if value is None: return ""
+    text = re.sub(r"<[^>]+>", " ", str(value))
+    text = " ".join(html.unescape(text).split())
+    return re.sub(r"\s+([.,;:!?])", r"\1", text)
+
+
+def _research_item_fields(item: dict) -> tuple[str, str, str, str | None]:
+    title = _plain_research_text(item.get("title")) or "Untitled"
+    url = str(item.get("url") or item.get("link") or "").strip()
+    summary = _plain_research_text(item.get("summary") or item.get("excerpt") or item.get("description"))
+    published_at = item.get("published_at") or item.get("date_gmt") or item.get("date")
+    if isinstance(published_at, str) and published_at and not re.search(r"(?:Z|[+-]\d\d:\d\d)$", published_at):
+        published_at = f"{published_at}Z"
+    return title, url, summary, published_at
 def poll_taxii_once() -> int:
     if not TAXII_ENABLED: return 0
-    if not TAXII_COLLECTION_URL or not TAXII_BEARER_TOKEN: return 0
-    object_count = 0; next_url = TAXII_COLLECTION_URL
+    if not TAXII_COLLECTION_URL or not (TAXII_BEARER_TOKEN or (TAXII_USERNAME and TAXII_PASSWORD)): return 0
+    object_count = 0; next_token = None
     try:
+        headers = {"Accept": "application/taxii+json;version=2.1", "User-Agent": "AgenticSOC/1.0"}
+        auth = httpx.BasicAuth(TAXII_USERNAME, TAXII_PASSWORD) if TAXII_USERNAME and TAXII_PASSWORD else None
+        if TAXII_BEARER_TOKEN: headers["Authorization"] = f"Bearer {TAXII_BEARER_TOKEN}"
         with httpx.Client(timeout=30, verify=CYFIRMA_VERIFY_SSL) as client:
             for _ in range(max(1, TAXII_MAX_PAGES)):
-                if not next_url: break
-                resp = client.get(next_url, headers={"Authorization": f"Bearer {TAXII_BEARER_TOKEN}", "Accept": "application/taxii+json;version=2.1"})
-                resp.raise_for_status(); data = resp.json(); objects = data.get("objects", []); object_count += len(objects)
-                next_url = data.get("next") or None
+                params = {"next": next_token} if next_token else None
+                resp = client.get(TAXII_COLLECTION_URL, headers=headers, auth=auth, params=params)
+                resp.raise_for_status(); data = resp.json(); objects = data.get("objects", [])
+                if not isinstance(objects, list): raise ValueError("invalid JSON TAXII response")
+                object_count += len(objects)
+                if not data.get("more"): break
+                next_token = data.get("next")
+                if not next_token: raise ValueError("invalid JSON TAXII pagination response")
         _stats["taxii_polls"] += 1; _stats["taxii_objects"] += object_count
         _stats["taxii_last_success"] = datetime.now(timezone.utc).isoformat(); _stats["taxii_last_error"] = None
     except Exception as exc:

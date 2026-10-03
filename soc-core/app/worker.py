@@ -96,30 +96,45 @@ def raw_event_loop() -> None:
             if _process_event(event): redis_client.ack_raw_event(payload)
             else: logger.warning("Raw event queue outcome=%s", redis_client.retry_raw_event(payload))
         except Exception: logger.exception("raw_event_loop error"); time.sleep(2)
+
+
+def _process_wazuh_batch(stream: str, documents: list[dict], normalizer, prefix: str,
+                         timestamp_paths: tuple[str, ...]) -> None:
+    completed_cursor = None
+    for document in documents:
+        doc_id = f"{prefix}-{document.get('_id', '')}"
+        if _dedupe(doc_id):
+            if not _process_event(normalizer(document)):
+                _seen_ids.discard(doc_id)
+                break
+        cursor = wazuh_client.document_cursor(document, *timestamp_paths)
+        if cursor: completed_cursor = cursor
+    if completed_cursor:
+        redis_client.set_source_cursor(stream, completed_cursor)
+
+
 def wazuh_alerts_loop() -> None:
     while True:
         try:
-            for alert in wazuh_client.fetch_recent_alerts():
-                doc_id = f"alert-{alert.get('_id', '')}"
-                if not _dedupe(doc_id): continue
-                if not _process_event(wazuh_client.wazuh_alert_to_normalized(alert)): _seen_ids.discard(doc_id)
+            cursor = redis_client.get_source_cursor("wazuh:alerts")
+            _process_wazuh_batch("wazuh:alerts", wazuh_client.fetch_recent_alerts(cursor=cursor),
+                                 wazuh_client.wazuh_alert_to_normalized, "alert", ("@timestamp",))
         except Exception: logger.exception("wazuh_alerts_loop error")
         time.sleep(WAZUH_POLL_INTERVAL_SECONDS)
 def wazuh_fim_loop() -> None:
     while True:
         try:
-            for fim in wazuh_client.fetch_recent_fim_events():
-                doc_id = f"fim-{fim.get('_id', '')}"
-                if not _dedupe(doc_id): continue
-                if not _process_event(wazuh_client.wazuh_fim_to_normalized(fim)): _seen_ids.discard(doc_id)
+            cursor = redis_client.get_source_cursor("wazuh:fim")
+            _process_wazuh_batch("wazuh:fim", wazuh_client.fetch_recent_fim_events(cursor=cursor),
+                                 wazuh_client.wazuh_fim_to_normalized, "fim", ("@timestamp",))
         except Exception: logger.exception("wazuh_fim_loop error")
         time.sleep(WAZUH_FIM_POLL_INTERVAL_SECONDS)
 def wazuh_vuln_loop() -> None:
     while True:
         try:
-            for vuln in wazuh_client.fetch_recent_vulnerabilities():
-                doc_id = f"vuln-{vuln.get('_id', '')}"
-                if not _dedupe(doc_id): continue
-                if not _process_event(wazuh_client.wazuh_vulnerability_to_normalized(vuln)): _seen_ids.discard(doc_id)
+            cursor = redis_client.get_source_cursor("wazuh:vulnerabilities")
+            _process_wazuh_batch("wazuh:vulnerabilities", wazuh_client.fetch_recent_vulnerabilities(cursor=cursor),
+                                 wazuh_client.wazuh_vulnerability_to_normalized, "vuln",
+                                 ("vulnerability.detected_at", "@timestamp"))
         except Exception: logger.exception("wazuh_vuln_loop error")
         time.sleep(WAZUH_VULN_POLL_INTERVAL_SECONDS)

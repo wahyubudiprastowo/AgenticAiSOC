@@ -7,6 +7,7 @@ QUEUE_RAW_PROCESSING = os.getenv("QUEUE_RAW_PROCESSING", f"{QUEUE_RAW_EVENTS}:pr
 QUEUE_RAW_DLQ = os.getenv("QUEUE_RAW_DLQ", f"{QUEUE_RAW_EVENTS}:dead_letter")
 QUEUE_MAX_RETRIES = max(0, int(os.getenv("QUEUE_MAX_RETRIES", "3")))
 _RETRY_HASH = f"{QUEUE_RAW_EVENTS}:retry_count"
+_SOURCE_CURSOR_PREFIX = "soc:source_cursor:"
 _client: Optional[redis.Redis] = None
 def get_client() -> redis.Redis:
     global _client
@@ -57,3 +58,17 @@ def increment_window(key: str, ttl_seconds: int) -> int:
     return count
 def claim_once(key: str, ttl_seconds: int) -> bool:
     return bool(get_client().set(key, "1", nx=True, ex=ttl_seconds))
+
+
+def get_source_cursor(stream: str) -> dict | None:
+    value = get_client().get(f"{_SOURCE_CURSOR_PREFIX}{stream}")
+    if not value: return None
+    try:
+        parsed = json.loads(value)
+        return parsed if isinstance(parsed, dict) else None
+    except (TypeError, ValueError):
+        return None
+
+
+def set_source_cursor(stream: str, cursor: dict) -> None:
+    get_client().set(f"{_SOURCE_CURSOR_PREFIX}{stream}", json.dumps(cursor, separators=(",", ":")))
