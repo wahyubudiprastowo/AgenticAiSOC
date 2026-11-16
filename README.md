@@ -1,15 +1,47 @@
-# Agentic AI SOC Platform — Unique Ports (v4) + 17 Detection Categories
+# Agentic AI SOC Platform — 17 Detection Categories, 20 Skills
 
-Full-stack Agentic AI SOC covering 17 attack detection categories across
-Syslog, Wazuh, M365/Defender XDR, and 6+ Threat Intelligence providers
-→ Two-Tier Filtering → Hermes Orchestrator (20 skills covering 17 categories) → Jev (9router)
-Reasoning → Qdrant memory → Visual Dashboard.
+<p align="center">
+  <strong>Full-stack security operations with deterministic detection, AI-assisted triage, threat intelligence enrichment, and an operator dashboard.</strong><br />
+  Syslog · Wazuh · Microsoft 365 · Defender XDR · Threat Intelligence · Qdrant
+</p>
+
+<p align="center">
+  <a href="#motion-preview">Motion preview</a> ·
+  <a href="#what-it-does">What it does</a> ·
+  <a href="#quick-start">Quick start</a> ·
+  <a href="#all-17-detection-categories">Detection coverage</a> ·
+  <a href="#project-layout">Project layout</a>
+</p>
+
+<p align="center">
+  <img src="https://img.shields.io/badge/detection%20categories-17-e63946" alt="17 detection categories" />
+  <img src="https://img.shields.io/badge/Hermes%20skills-20-6f42c1" alt="20 Hermes skills" />
+  <img src="https://img.shields.io/badge/Python-3.11-3776AB?logo=python&logoColor=white" alt="Python 3.11" />
+  <img src="https://img.shields.io/badge/Docker-Compose-2496ED?logo=docker&logoColor=white" alt="Docker Compose" />
+  <img src="https://img.shields.io/badge/audit-103%20PASS%20%2F%200%20FAIL-16803d" alt="103 pass and 0 fail audit" />
+</p>
+
+![Agentic AI SOC motion preview](docs/assets/agentic-ai-soc-motion.gif)
+
+**[Watch or download the full Agentic AI SOC motion preview](docs/assets/agentic-ai-soc-motion.mp4)**
+
+## What It Does
+
+Agentic AI SOC turns security signals into explainable, reviewable findings:
+
+| Layer | Responsibility |
+| --- | --- |
+| **Collectors** | Receive Syslog, Wazuh, M365 / Defender XDR, and manual cloud or Kubernetes events. |
+| **Detection** | Normalize evidence into 17 stable categories with deterministic rules and correlation. |
+| **Enrichment** | Check public indicators against 6+ threat-intelligence providers with bounded fan-out. |
+| **AI reasoning** | Hermes orchestrates 20 skills; Jev provides advisory reasoning without replacing canonical findings. |
+| **Operations** | Dashboard, PostgreSQL, Redis queues, history, evidence, health, and audit trails. |
+
+The design separates **what was detected** from **what an AI recommends**, so an AI outage does not erase or rewrite a finding.
 
 ## Motion Preview
 
-<video src="docs/assets/agentic-ai-soc-motion.mp4" controls muted loop playsinline width="100%">
-  Your browser cannot play the preview inline. [Open the Agentic AI SOC motion preview](docs/assets/agentic-ai-soc-motion.mp4).
-</video>
+![Agentic AI SOC motion preview](docs/assets/agentic-ai-soc-motion.gif)
 
 **[Open or download the Agentic AI SOC motion preview](docs/assets/agentic-ai-soc-motion.mp4)**
 
