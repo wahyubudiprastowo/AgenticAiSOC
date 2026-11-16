@@ -5,6 +5,14 @@ Syslog, Wazuh, M365/Defender XDR, and 6+ Threat Intelligence providers
 → Two-Tier Filtering → Hermes Orchestrator (20 skills covering 17 categories) → Jev (9router)
 Reasoning → Qdrant memory → Visual Dashboard.
 
+## Motion Preview
+
+<video src="docs/assets/agentic-ai-soc-motion.mp4" controls muted loop playsinline width="100%">
+  Your browser cannot play the preview inline. [Open the Agentic AI SOC motion preview](docs/assets/agentic-ai-soc-motion.mp4).
+</video>
+
+**[Open or download the Agentic AI SOC motion preview](docs/assets/agentic-ai-soc-motion.mp4)**
+
 ## Quick start
 ```bash
 chmod 600 .env
